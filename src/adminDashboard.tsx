@@ -17,7 +17,7 @@ const B = {
   white: "#FFFFFF",
 };
 
-const BRAND_LOGO_SRC = "/branding/main-logo.png";
+const BRAND_LOGO_SRC = `${import.meta.env.BASE_URL}branding/main_logo.png`;
 const RESIDENTIAL_EVENT_COLOR = "#6C3483";
 const BUILDER_COLOR_PALETTE = ["#2D6A4F", "#A15C16", "#1F5F8B", "#8B3D5E", "#546A2E", "#6C4A8B"];
 

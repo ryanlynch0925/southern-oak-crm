@@ -25,7 +25,7 @@ const B = {
   green:"#2D4A2D", green2:"#3A5C3A", white:"#FFFFFF",
 };
 
-const BRAND_LOGO_SRC = "/branding/main_logo.png";
+const BRAND_LOGO_SRC = `${import.meta.env.BASE_URL}branding/main_logo.png`;
 
 const STAT = {
   "New Request":        {c:"#1A5276",bg:"#D6EAF8"},

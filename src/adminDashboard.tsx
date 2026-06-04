@@ -1,5 +1,8 @@
 ﻿import { useEffect, useMemo, useState } from "react";
 
+
+import FinanceDashboard from "./adminFinanceDashboard";
+
 const B = {
   dark: "#16130D",
   dark2: "#121A10",
@@ -35,13 +38,26 @@ const INP = {
 };
 
 const ADMIN_SECTIONS = [
+  { id: "dashboard", label: "Dashboard", icon: "ti-layout-dashboard" },
   { id: "tickets", label: "Estimate Tickets", icon: "ti-file-text" },
   { id: "calendar", label: "Calendar Schedule", icon: "ti-calendar-event" },
   { id: "jobs", label: "Jobs", icon: "ti-hammer" },
   { id: "crews", label: "Crews", icon: "ti-users-group" },
   { id: "builders", label: "Builders", icon: "ti-building-community" },
+  { id: "finance", label: "Finance", icon: "ti-chart-pie-3" },
   { id: "settings", label: "Settings", icon: "ti-settings" },
 ];
+
+const SECTION_SUBTITLES = {
+  dashboard: "Operations overview and quick access",
+  tickets: "Estimate intake and follow-up queue",
+  calendar: "Scheduling, crews, and work assignments",
+  jobs: "Accepted and active work across the board",
+  crews: "Capacity, assignments, and workload",
+  builders: "Production builder relationships and communities",
+  finance: "Revenue, payments, and profitability reporting",
+  settings: "Scheduling rules and planning settings",
+};
 
 const ESTIMATE_STATUSES = [
   "New Request",
@@ -499,6 +515,197 @@ function AdminHeader({ section, setSection, onLogout, setPage, alerts }) {
         </div>
       </div>
     </div>
+  );
+}
+
+function SidebarBrand() {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+      <Logo sm />
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontSize: ".82rem", fontWeight: 800, letterSpacing: ".04em", textTransform: "uppercase", color: "var(--oak-cream)", lineHeight: 1.15 }}>Southern Oak</div>
+        <div style={{ fontSize: ".68rem", color: "rgba(243,232,208,.68)", fontWeight: 700 }}>Construction</div>
+      </div>
+    </div>
+  );
+}
+
+function AdminSidebar({ section, setSection, financeView, setFinanceView, alerts, mobileOpen, onClose }) {
+  return (
+    <>
+      {mobileOpen && <button onClick={onClose} aria-label="Close navigation" style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.42)", border: "none", padding: 0, zIndex: 3090 }} />}
+      <aside className={`admin-sidebar${mobileOpen ? " is-open" : ""}`} style={{ background: "linear-gradient(180deg,var(--oak-black),var(--oak-deep-green))", color: "var(--oak-cream)" }}>
+        <div style={{ padding: 20, borderBottom: "1px solid rgba(243,232,208,.08)" }}>
+          <SidebarBrand />
+        </div>
+        <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 8 }}>
+          {alerts > 0 && (
+            <div style={{ padding: "10px 12px", borderRadius: 10, background: "rgba(154,116,26,.12)", color: "var(--oak-tan)", fontSize: ".78rem", fontWeight: 700 }}>
+              {alerts} jobs need attention
+            </div>
+          )}
+          {ADMIN_SECTIONS.map(item => {
+            const active = section === item.id;
+            return (
+              <button
+                key={item.id}
+                onClick={() => {
+                  setSection(item.id);
+                  onClose();
+                }}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  width: "100%",
+                  minHeight: 44,
+                  padding: "10px 12px",
+                  borderRadius: 10,
+                  border: `1px solid ${active ? "rgba(154,116,26,.32)" : "rgba(243,232,208,.08)"}`,
+                  background: active ? "rgba(154,116,26,.14)" : "transparent",
+                  color: active ? "var(--oak-cream)" : "rgba(243,232,208,.78)",
+                  cursor: "pointer",
+                  fontFamily: "inherit",
+                  fontWeight: 700,
+                  fontSize: ".82rem",
+                  textAlign: "left",
+                }}
+              >
+                <i className={`ti ${item.icon}`} style={{ fontSize: 16 }} aria-hidden="true" />
+                <span>{item.label}</span>
+              </button>
+            );
+          })}
+          {section === "finance" && (
+            <div style={{ marginTop: 4, marginLeft: 10, display: "flex", flexDirection: "column", gap: 6, paddingLeft: 12, borderLeft: "1px solid rgba(243,232,208,.14)" }}>
+              {[
+                { id: "overview", label: "Overview" },
+                { id: "revenue", label: "Revenue" },
+                { id: "payments", label: "Payments" },
+                { id: "reports", label: "Reports" },
+              ].map(item => {
+                const active = financeView === item.id;
+                return (
+                  <button
+                    key={item.id}
+                    onClick={() => setFinanceView(item.id)}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      minHeight: 40,
+                      padding: "8px 10px",
+                      borderRadius: 8,
+                      border: "none",
+                      background: active ? "rgba(23,35,21,.48)" : "transparent",
+                      color: active ? "var(--oak-tan)" : "rgba(243,232,208,.68)",
+                      cursor: "pointer",
+                      fontFamily: "inherit",
+                      fontWeight: 700,
+                      fontSize: ".76rem",
+                      textAlign: "left",
+                    }}
+                  >
+                    <span style={{ width: 6, height: 6, borderRadius: 999, background: active ? "var(--oak-gold)" : "rgba(243,232,208,.24)", display: "inline-block" }} />
+                    {item.label}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </aside>
+    </>
+  );
+}
+
+function AdminTopBar({ section, financeView, onOpenMenu, onLogout, setPage }) {
+  const title = section === "finance"
+    ? `Finance${financeView !== "overview" ? ` / ${financeView[0].toUpperCase()}${financeView.slice(1)}` : ""}`
+    : ADMIN_SECTIONS.find(item => item.id === section)?.label || "Dashboard";
+  return (
+    <div className="admin-topbar-shell">
+      <div className="admin-topbar">
+        <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
+          <button className="admin-menu-toggle" onClick={onOpenMenu} style={{ width: 42, height: 42, borderRadius: 10, border: "1px solid var(--admin-border)", background: "var(--admin-card-bg)", color: "var(--admin-text)", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <i className="ti ti-menu-2" style={{ fontSize: 18 }} aria-hidden="true" />
+          </button>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: "1rem", fontWeight: 800, color: "var(--admin-text)" }}>{title}</div>
+            <div style={{ fontSize: ".76rem", color: "var(--admin-muted)" }}>{SECTION_SUBTITLES[section] || "Operations workspace"}</div>
+          </div>
+        </div>
+        <div className="admin-topbar-actions" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button className="oak-button oak-button--outline" onClick={() => setPage("home")} style={{ minHeight: 42, padding: "8px 12px", borderRadius: 10, cursor: "pointer", fontWeight: 700, fontFamily: "inherit" }}>
+            <i className="ti ti-world" style={{ marginRight: 6, fontSize: 13 }} aria-hidden="true" />
+            View Site
+          </button>
+          <button className="oak-button oak-button--dark" onClick={onLogout} style={{ minHeight: 42, padding: "8px 12px", borderRadius: 10, cursor: "pointer", fontWeight: 700, fontFamily: "inherit", border: "none" }}>
+            <i className="ti ti-logout" style={{ marginRight: 6, fontSize: 13 }} aria-hidden="true" />
+            Sign Out
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DashboardHomeSection({ tickets, jobs, events, conflicts, setSection }) {
+  const openReceivables = tickets.filter(ticket => ["Needs Review", "Estimate Accepted", "Ready to Schedule"].includes(ticket.status)).slice(0, 4);
+  const upcoming = events.filter(event => event.date >= todayIso()).slice(0, 5);
+  return (
+    <>
+      <SummaryCards tickets={tickets} jobs={jobs} events={events} conflicts={conflicts} />
+      <div style={{ display: "grid", gridTemplateColumns: "1.2fr .8fr", gap: 16 }}>
+        <Card className="admin-section-card">
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", marginBottom: 14, flexWrap: "wrap" }}>
+            <div>
+              <h1 style={{ fontSize: "1.2rem", fontWeight: 700, color: B.dark, marginBottom: 4 }}>Operations Dashboard</h1>
+              <p style={{ fontSize: ".8rem", color: B.gray }}>Quick access into scheduling, estimate follow-up, and active work.</p>
+            </div>
+            <button className="oak-button oak-button--primary" onClick={() => setSection("tickets")} style={{ minHeight: 42, padding: "10px 14px", borderRadius: 10, border: "none", cursor: "pointer", fontWeight: 700, fontFamily: "inherit" }}>
+              Open Estimate Queue
+            </button>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 12 }}>
+            {[
+              { label: "Estimate Tickets", icon: "ti-file-text", onClick: () => setSection("tickets") },
+              { label: "Calendar Schedule", icon: "ti-calendar-event", onClick: () => setSection("calendar") },
+              { label: "Jobs", icon: "ti-hammer", onClick: () => setSection("jobs") },
+              { label: "Finance", icon: "ti-chart-pie-3", onClick: () => setSection("finance") },
+            ].map(item => (
+              <button key={item.label} className="oak-button oak-button--outline" onClick={item.onClick} style={{ minHeight: 74, padding: "14px 16px", borderRadius: 10, cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}>
+                <div style={{ fontSize: ".76rem", color: B.gray, marginBottom: 8 }}><i className={`ti ${item.icon}`} style={{ marginRight: 6 }} aria-hidden="true" />Workspace</div>
+                <div style={{ fontSize: ".92rem", fontWeight: 700, color: B.dark }}>{item.label}</div>
+              </button>
+            ))}
+          </div>
+        </Card>
+        <Card className="admin-section-card">
+          <div style={{ fontSize: ".9rem", fontWeight: 700, color: B.dark, marginBottom: 12 }}>Needs Attention</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {openReceivables.map(ticket => (
+              <div key={ticket.id} style={{ padding: "10px 12px", borderRadius: 10, background: B.sand, border: `1px solid ${B.border}` }}>
+                <div style={{ fontSize: ".82rem", fontWeight: 700, color: B.dark }}>{ticket.name}</div>
+                <div style={{ fontSize: ".74rem", color: B.gray }}>{ticket.ptype} · {ticket.status}</div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      </div>
+      <Card className="admin-section-card" style={{ marginTop: 16 }}>
+        <div style={{ fontSize: ".9rem", fontWeight: 700, color: B.dark, marginBottom: 12 }}>Upcoming Scheduled Work</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(210px,1fr))", gap: 10 }}>
+          {upcoming.map(event => (
+            <div key={event.id} style={{ padding: "12px 14px", borderRadius: 10, border: `1px solid ${B.border}`, background: B.white }}>
+              <div style={{ fontSize: ".8rem", fontWeight: 700, color: B.dark }}>{event.customer_name || `${event.builder_name} Lot ${event.lot_number}`}</div>
+              <div style={{ fontSize: ".74rem", color: B.gray, marginTop: 4 }}>{fmtDate(event.date)} · {event.time}</div>
+              <div style={{ fontSize: ".72rem", color: B.gray, marginTop: 4 }}>{event.phase_label}</div>
+            </div>
+          ))}
+        </div>
+      </Card>
+    </>
   );
 }
 
@@ -1639,7 +1846,7 @@ const thStyle = { padding: "8px 10px", borderBottom: "1px solid var(--color-bord
 const tdStyle = { padding: "10px", borderBottom: "1px solid #F1EEE7", fontSize: ".78rem", color: B.mid };
 
 export default function AdminWorkspace({ tickets, onUpdateTicket, onLogout, setPage }) {
-  const [section, setSection] = useState("tickets");
+  const [section, setSection] = useState("dashboard");
   const [selectedTicketId, setSelectedTicketId] = useState(null);
   const [selectedJobId, setSelectedJobId] = useState(null);
   const [jobs, setJobs] = useState(() => buildDefaultJobs().map(normalizeBuilderJob));
@@ -1657,6 +1864,8 @@ export default function AdminWorkspace({ tickets, onUpdateTicket, onLogout, setP
   const [conflictState, setConflictState] = useState(null);
   const [weekendOverrideState, setWeekendOverrideState] = useState(null);
   const [warningState, setWarningState] = useState(null);
+  const [financeView, setFinanceView] = useState("overview");
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   const selectedTicket = tickets.find(ticket => ticket.id === selectedTicketId) || null;
   const selectedJob = jobs.find(job => job.id === selectedJobId) || null;
@@ -2108,21 +2317,44 @@ export default function AdminWorkspace({ tickets, onUpdateTicket, onLogout, setP
     if (selectedJob) {
       return <JobDetailView job={selectedJob} crews={crews} onBack={() => setSelectedJobId(null)} onSaveJob={job => setJobs(prev => prev.map(item => item.id === job.id ? job : item))} onOpenPhaseEdit={openPhaseEdit} />;
     }
+    if (section === "dashboard") return <DashboardHomeSection tickets={tickets} jobs={jobs} events={allEvents} conflicts={activeConflicts} setSection={setSection} />;
     if (section === "tickets") return <EstimateTicketsSection tickets={tickets} onSelectTicket={ticket => setSelectedTicketId(ticket.id)} onAcceptTicket={ticket => applyTicketStatus(ticket, "Estimate Accepted", "Estimate accepted and ready for office scheduling.")} onScheduleTicket={openResidentialSchedule} jobs={jobs} />;
     if (section === "calendar") return <CalendarSection jobs={jobs} crews={crews} builders={builders} onOpenJob={jobId => setSelectedJobId(jobId)} pendingResidentialDraft={residentialDraft} onPendingResidentialDraftChange={setResidentialDraft} onSavePendingResidentialSchedule={saveResidentialSchedule} onCancelPendingResidentialSchedule={() => setResidentialDraft(null)} pendingBuilderSchedule={builderScheduleDraft} onPendingBuilderScheduleChange={setBuilderScheduleDraft} onSavePendingBuilderSchedule={saveBuilderSchedule} onCancelPendingBuilderSchedule={() => setBuilderScheduleDraft(null)} />;
     if (section === "jobs") return <JobsSection jobs={jobs} onSelectJob={jobId => setSelectedJobId(jobId)} onCreateBuilderJob={openBuilderJobModal} />;
     if (section === "crews") return <CrewsSection crews={crews} jobs={jobs} onUpdateCrew={(crewId, patch) => setCrews(prev => prev.map(crew => crew.id === crewId ? { ...crew, ...patch } : crew))} />;
     if (section === "builders") return <BuildersSection builders={builders} jobs={jobs} onCreateBuilderJob={openBuilderJobModal} onCreateBuilder={() => setBuilderRecordDraft({ name: "", contact: "", phone: "", communities: "" })} onOpenJob={jobId => setSelectedJobId(jobId)} />;
+    if (section === "finance") return <FinanceDashboard financeView={financeView} onFinanceViewChange={setFinanceView} />;
     return <SettingsSection settings={settings} onUpdateSettings={patch => setSettings(prev => ({ ...prev, ...patch }))} historyCounts={{ scheduleChanges: scheduleHistory.length, overrides: overrideHistory.length }} />;
   })();
 
   return (
     <div className="admin-page-shell" style={{ minHeight: "100vh", background: "#F4F6F3" }}>
-      {!selectedTicket && !selectedJob && <AdminHeader section={section} setSection={setSection} onLogout={onLogout} setPage={setPage} alerts={jobsNeedingAttention} />}
       {!selectedTicket && !selectedJob && (
-        <div className="admin-content-shell" style={{ maxWidth: 1220, margin: "0 auto", padding: "22px 16px 60px" }}>
-          <SummaryCards tickets={tickets} jobs={jobs} events={allEvents} conflicts={activeConflicts} />
-          {content}
+        <div className="admin-shell">
+          <AdminSidebar
+            section={section}
+            setSection={next => {
+              setSection(next);
+              if (next !== "finance") setFinanceView("overview");
+            }}
+            financeView={financeView}
+            setFinanceView={setFinanceView}
+            alerts={jobsNeedingAttention}
+            mobileOpen={mobileNavOpen}
+            onClose={() => setMobileNavOpen(false)}
+          />
+          <div className="admin-main-shell">
+            <AdminTopBar
+              section={section}
+              financeView={financeView}
+              onOpenMenu={() => setMobileNavOpen(true)}
+              onLogout={onLogout}
+              setPage={setPage}
+            />
+            <div className="admin-content-shell" style={{ padding: "22px 16px 60px" }}>
+              {content}
+            </div>
+          </div>
         </div>
       )}
       {(selectedTicket || selectedJob) && content}
@@ -2168,5 +2400,3 @@ export default function AdminWorkspace({ tickets, onUpdateTicket, onLogout, setP
     </div>
   );
 }
-
-

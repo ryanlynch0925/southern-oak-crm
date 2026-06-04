@@ -1,4 +1,10 @@
 :root {
+  --admin-page-bg: #f4f6f3;
+  --admin-card-bg: #ffffff;
+  --admin-card-soft: #fafaf7;
+  --admin-border: #d8d2c3;
+  --admin-text: #16130d;
+  --admin-muted: #66705f;
   --oak-black: #16130d;
   --oak-deep-green: #121a10;
   --oak-green: #172315;
@@ -113,10 +119,53 @@ a {
 
 .admin-page-shell {
   overflow-x: hidden;
+  background: var(--admin-page-bg);
+  color: var(--admin-text);
 }
 
 .admin-header-shell {
   background: var(--oak-black);
+}
+
+.admin-page-shell .admin-content-shell {
+  background: var(--admin-page-bg);
+}
+
+.admin-page-shell .admin-section-card,
+.admin-page-shell .admin-summary-grid > div,
+.admin-page-shell .calendar-side-panel,
+.admin-page-shell .calendar-main-card {
+  background: var(--admin-card-bg) !important;
+  border-color: var(--admin-border) !important;
+}
+
+.admin-page-shell .calendar-day-card {
+  background: var(--admin-card-bg) !important;
+  border-color: var(--admin-border) !important;
+}
+
+.admin-page-shell .calendar-event {
+  color: var(--admin-text);
+}
+
+.admin-page-shell .oak-button--outline,
+.admin-page-shell .oak-button--outlineDark {
+  background: var(--admin-card-bg) !important;
+  color: var(--admin-text) !important;
+  border-color: var(--admin-border) !important;
+}
+
+.admin-page-shell .oak-button--outline:hover,
+.admin-page-shell .oak-button--outlineDark:hover,
+.admin-page-shell .oak-button--outline:focus-visible,
+.admin-page-shell .oak-button--outlineDark:focus-visible {
+  background: var(--admin-card-soft) !important;
+}
+
+.admin-header-shell .admin-action-button,
+.admin-header-shell .admin-tab-button {
+  border-color: rgba(212, 180, 125, 0.18) !important;
+  color: var(--oak-cream) !important;
 }
 
 .admin-brand-row {

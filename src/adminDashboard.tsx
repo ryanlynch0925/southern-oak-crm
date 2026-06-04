@@ -3,18 +3,18 @@
 const B = {
   dark: "#16130D",
   dark2: "#121A10",
-  mid: "#4A382B",
-  gray: "#6F5A32",
-  lgray: "#CBB895",
-  border: "rgba(212,180,125,.25)",
-  sand: "#F3E8D0",
-  sandD: "#E7D5B2",
+  mid: "#16130D",
+  gray: "#66705F",
+  lgray: "#98A18F",
+  border: "#D8D2C3",
+  sand: "#FAFAF7",
+  sandD: "#F5F6F2",
   tan: "#D4B47D",
   bronze: "#9A741A",
   bronzeL: "#B98A2E",
   green: "#172315",
   green2: "#25301E",
-  white: "#FFF8EA",
+  white: "#FFFFFF",
 };
 
 const BRAND_LOGO_SRC = `${import.meta.env.BASE_URL}branding/main_logo.png`;
@@ -24,7 +24,7 @@ const BUILDER_COLOR_PALETTE = ["#2D6A4F", "#A15C16", "#1F5F8B", "#8B3D5E", "#546
 const INP = {
   width: "100%",
   padding: "9px 12px",
-  border: "1.5px solid #DDD5C5",
+  border: `1px solid ${B.border}`,
   borderRadius: 6,
   fontSize: ".88rem",
   fontFamily: "inherit",
@@ -67,21 +67,21 @@ const JOB_STATUSES = [
 ];
 
 const STATUS_STYLES = {
-  "New Request": { c: "#1A5276", bg: "#D6EAF8" },
-  "Needs Review": { c: "#784212", bg: "#FDEBD0" },
-  "Rough Estimate Sent": { c: "#6C3483", bg: "#F4ECF7" },
-  "Site Visit Needed": { c: "#922B21", bg: "#FADBD8" },
-  Scheduled: { c: "#1A5632", bg: "#D5F5E3" },
-  "Final Quote Sent": { c: "#1B4F72", bg: "#D6EAF8" },
-  "Estimate Accepted": { c: "#145A32", bg: "#D4EFDF" },
-  "Ready to Schedule": { c: "#7D6608", bg: "#FCF3CF" },
-  "In Progress": { c: "#884EA0", bg: "#EBDEF0" },
-  Completed: { c: "#145A32", bg: "#A9DFBF" },
-  Delayed: { c: "#922B21", bg: "#FADBD8" },
-  Cancelled: { c: "#4D5656", bg: "#EAEDED" },
-  Won: { c: "#145A32", bg: "#A9DFBF" },
-  Lost: { c: "#4D5656", bg: "#EAEDED" },
-  Pending: { c: "#5D6D7E", bg: "#E5E8E8" },
+  "New Request": { c: "#275A85", bg: "#E8F1FA" },
+  "Needs Review": { c: "#7C6320", bg: "#F7F1DF" },
+  "Rough Estimate Sent": { c: "#6A4D8E", bg: "#F1ECF8" },
+  "Site Visit Needed": { c: "#A14B40", bg: "#F9E8E4" },
+  Scheduled: { c: "#25603C", bg: "#E6F3EA" },
+  "Final Quote Sent": { c: "#275A85", bg: "#E8F1FA" },
+  "Estimate Accepted": { c: "#25603C", bg: "#E6F3EA" },
+  "Ready to Schedule": { c: "#8A6A12", bg: "#F8F1D9" },
+  "In Progress": { c: "#5B4A88", bg: "#EEE9F8" },
+  Completed: { c: "#25603C", bg: "#DFF0E5" },
+  Delayed: { c: "#6B4EA0", bg: "#EEE9F8" },
+  Cancelled: { c: "#5F645D", bg: "#ECEEE9" },
+  Won: { c: "#25603C", bg: "#DFF0E5" },
+  Lost: { c: "#5F645D", bg: "#ECEEE9" },
+  Pending: { c: "#586455", bg: "#EEF1EC" },
 };
 
 const RESPONSIBLE_PARTIES = [
@@ -208,13 +208,13 @@ function Pill({ status, label }) {
 }
 
 function Card({ children, style = {}, className = "" }) {
-  return <div className={className} style={{ background: B.white, borderRadius: 8, padding: 18, border: "0.5px solid var(--color-border-tertiary)", ...style }}>{children}</div>;
+  return <div className={className} style={{ background: B.white, borderRadius: 8, padding: 18, border: `1px solid ${B.border}`, ...style }}>{children}</div>;
 }
 
 function Modal({ title, children, onClose, width = 720 }) {
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.45)", zIndex: 3000, padding: 20, overflowY: "auto" }}>
-      <div style={{ maxWidth: width, margin: "40px auto", background: B.white, borderRadius: 10, border: "0.5px solid var(--color-border-tertiary)", overflow: "hidden" }}>
+      <div style={{ maxWidth: width, margin: "40px auto", background: B.white, borderRadius: 10, border: `1px solid ${B.border}`, overflow: "hidden" }}>
         <div style={{ padding: "16px 18px", borderBottom: "0.5px solid var(--color-border-tertiary)", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
           <div style={{ fontSize: "1rem", fontWeight: 700, color: B.dark }}>{title}</div>
           <button onClick={onClose} style={{ background: "none", border: "none", color: B.gray, cursor: "pointer", fontSize: "1rem" }}>
@@ -655,7 +655,7 @@ function TicketDetailView({ ticket, onBack, onUpdateTicket, onOpenSchedule, sour
   };
 
   return (
-    <div style={{ minHeight: "100vh", background: "#F0F2F5" }}>
+    <div style={{ minHeight: "100vh", background: "#F4F6F3" }}>
       <div style={{ background: B.dark, padding: "0 16px" }}>
         <div style={{ maxWidth: 1100, margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "space-between", height: 56 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -710,7 +710,7 @@ function TicketDetailView({ ticket, onBack, onUpdateTicket, onOpenSchedule, sour
                   </div>
                 ))}
               </div>
-              {t.notes && <div style={{ marginTop: 14, paddingTop: 12, borderTop: "0.5px solid var(--color-border-tertiary)" }}>
+              {t.notes && <div style={{ marginTop: 14, paddingTop: 12, borderTop: `1px solid ${B.border}` }}>
                 <div style={{ fontSize: ".72rem", color: B.gray, marginBottom: 4, textTransform: "uppercase", letterSpacing: .5 }}>Customer notes</div>
                 <p style={{ fontSize: ".82rem", color: B.mid, lineHeight: 1.6, background: B.sandD, padding: "10px 12px", borderRadius: 6 }}>{t.notes}</p>
               </div>}
@@ -923,7 +923,7 @@ function CalendarSection({ jobs, crews, builders, onOpenJob, pendingResidentialD
           <div className="calendar-month-grid" style={{ display: "grid", gridTemplateColumns: "repeat(7,minmax(0,1fr))", gap: 8 }}>
             {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map(day => <div key={day} style={{ fontSize: ".72rem", color: B.gray, fontWeight: 700, textTransform: "uppercase", padding: "0 4px 4px" }}>{day}</div>)}
             {monthDays.map(day => (
-              <div className="calendar-day-card" key={day.iso} onClick={() => pickScheduleDate(day.iso)} style={{ minHeight: 124, border: `1px solid ${(pendingResidentialDraft?.scheduled_date === day.iso || pendingBuilderSchedule?.scheduled_date === day.iso) ? B.bronze : anchorDate === day.iso ? B.green : B.border}`, borderRadius: 8, padding: 8, background: day.inMonth ? B.white : "#FAFAF8", cursor: "pointer", boxShadow: (pendingResidentialDraft?.scheduled_date === day.iso || pendingBuilderSchedule?.scheduled_date === day.iso) ? `inset 0 0 0 1px ${B.bronze}` : "none" }}>
+              <div className="calendar-day-card" key={day.iso} onClick={() => pickScheduleDate(day.iso)} style={{ minHeight: 124, border: `1px solid ${(pendingResidentialDraft?.scheduled_date === day.iso || pendingBuilderSchedule?.scheduled_date === day.iso) ? B.bronze : anchorDate === day.iso ? B.green : B.border}`, borderRadius: 8, padding: 8, background: day.inMonth ? B.white : B.sand, cursor: "pointer", boxShadow: (pendingResidentialDraft?.scheduled_date === day.iso || pendingBuilderSchedule?.scheduled_date === day.iso) ? `inset 0 0 0 1px ${B.bronze}` : "none" }}>
                 <div style={{ fontSize: ".74rem", fontWeight: 700, color: isWeekend(day.iso) ? "#922B21" : B.dark, marginBottom: 8, display: "flex", justifyContent: "space-between" }}>
                   <span>{new Date(`${day.iso}T12:00:00`).getDate()}</span>
                   <span style={{ color: (pendingResidentialDraft?.scheduled_date === day.iso || pendingBuilderSchedule?.scheduled_date === day.iso) ? B.bronze : B.gray }}>{day.events.length > 0 ? day.events.length : (pendingResidentialDraft?.scheduled_date === day.iso || pendingBuilderSchedule?.scheduled_date === day.iso) ? "Pick" : ""}</span>
@@ -1321,7 +1321,7 @@ function SettingsSection({ settings, onUpdateSettings, historyCounts }) {
 function JobDetailView({ job, crews, onBack, onSaveJob, onOpenPhaseEdit }) {
   const crew = findCrewById(crews, job.crew_id);
   return (
-    <div style={{ minHeight: "100vh", background: "#F0F2F5" }}>
+    <div style={{ minHeight: "100vh", background: "#F4F6F3" }}>
       <div style={{ background: B.dark, padding: "0 16px" }}>
         <div style={{ maxWidth: 1100, margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "space-between", height: 56 }}>
           <button onClick={onBack} style={{ background: "none", border: "none", color: "rgba(255,255,255,.7)", cursor: "pointer", display: "flex", alignItems: "center", gap: 6, fontFamily: "inherit", fontSize: ".82rem" }}>
@@ -1372,7 +1372,7 @@ function JobDetailView({ job, crews, onBack, onSaveJob, onOpenPhaseEdit }) {
             <div style={{ fontSize: ".82rem", fontWeight: 700, color: B.dark, textTransform: "uppercase", letterSpacing: .5, marginBottom: 12 }}>Builder Slab Workflow</div>
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
               {sortBuilderPhases(job.phases || []).map((phase, idx) => (
-                <div key={phase.id} style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) auto", gap: 12, alignItems: "center", padding: "12px 10px", border: "1px solid var(--color-border-tertiary)", borderRadius: 8, background: phase.counts_toward_crew ? B.white : "#FAFAF8" }}>
+                <div key={phase.id} style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) auto", gap: 12, alignItems: "center", padding: "12px 10px", border: `1px solid ${B.border}`, borderRadius: 8, background: phase.counts_toward_crew ? B.white : B.sand }}>
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 10 }}>
                     <div>
                       <div style={{ fontSize: ".84rem", fontWeight: 700, color: B.dark }}>{idx + 1}. {phase.phase_label}</div>
@@ -2117,7 +2117,7 @@ export default function AdminWorkspace({ tickets, onUpdateTicket, onLogout, setP
   })();
 
   return (
-    <div className="admin-page-shell" style={{ minHeight: "100vh", background: "#F0F2F5" }}>
+    <div className="admin-page-shell" style={{ minHeight: "100vh", background: "#F4F6F3" }}>
       {!selectedTicket && !selectedJob && <AdminHeader section={section} setSection={setSection} onLogout={onLogout} setPage={setPage} alerts={jobsNeedingAttention} />}
       {!selectedTicket && !selectedJob && (
         <div className="admin-content-shell" style={{ maxWidth: 1220, margin: "0 auto", padding: "22px 16px 60px" }}>

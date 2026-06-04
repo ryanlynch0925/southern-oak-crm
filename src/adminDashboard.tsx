@@ -1,20 +1,20 @@
 ﻿import { useEffect, useMemo, useState } from "react";
 
 const B = {
-  dark: "#1A1A1A",
-  dark2: "#252525",
-  mid: "#3A3A3A",
-  gray: "#696969",
-  lgray: "#A8A094",
-  border: "#DDD5C5",
-  sand: "#F5F0E8",
-  sandD: "#EDE5D3",
-  tan: "#C4A882",
-  bronze: "#8B6914",
-  bronzeL: "#B8900F",
-  green: "#2D4A2D",
-  green2: "#3A5C3A",
-  white: "#FFFFFF",
+  dark: "#16130D",
+  dark2: "#121A10",
+  mid: "#4A382B",
+  gray: "#6F5A32",
+  lgray: "#CBB895",
+  border: "rgba(212,180,125,.25)",
+  sand: "#F3E8D0",
+  sandD: "#E7D5B2",
+  tan: "#D4B47D",
+  bronze: "#9A741A",
+  bronzeL: "#B98A2E",
+  green: "#172315",
+  green2: "#25301E",
+  white: "#FFF8EA",
 };
 
 const BRAND_LOGO_SRC = `${import.meta.env.BASE_URL}branding/main_logo.png`;
@@ -196,7 +196,7 @@ function Btn({ children, onClick, v = "primary", sm = false, full = false, style
     danger: { background: "#C0392B", color: B.white, border: "none" },
   };
   return (
-    <button disabled={disabled} onClick={disabled ? undefined : onClick} style={{ padding: pads, borderRadius: 6, fontSize: sm ? ".78rem" : ".88rem", fontWeight: 700, cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.55 : 1, fontFamily: "inherit", display: full ? "block" : "inline-block", width: full ? "100%" : undefined, textAlign: "center", ...(variants[v] || variants.primary), ...style }}>
+    <button className={`oak-button oak-button--${v}`} disabled={disabled} onClick={disabled ? undefined : onClick} style={{ padding: pads, borderRadius: 6, fontSize: sm ? ".78rem" : ".88rem", fontWeight: 700, cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.55 : 1, fontFamily: "inherit", display: full ? "block" : "inline-block", width: full ? "100%" : undefined, textAlign: "center", ...(variants[v] || variants.primary), ...style }}>
       {children}
     </button>
   );
@@ -207,8 +207,8 @@ function Pill({ status, label }) {
   return <span style={{ display: "inline-block", padding: "3px 10px", borderRadius: 20, background: cfg.bg, color: cfg.c, fontWeight: 700, fontSize: ".68rem", whiteSpace: "nowrap" }}>{label || status}</span>;
 }
 
-function Card({ children, style = {} }) {
-  return <div style={{ background: B.white, borderRadius: 8, padding: 18, border: "0.5px solid var(--color-border-tertiary)", ...style }}>{children}</div>;
+function Card({ children, style = {}, className = "" }) {
+  return <div className={className} style={{ background: B.white, borderRadius: 8, padding: 18, border: "0.5px solid var(--color-border-tertiary)", ...style }}>{children}</div>;
 }
 
 function Modal({ title, children, onClose, width = 720 }) {
@@ -471,27 +471,27 @@ function buildBuilderJobFromDraft(draft, builders) {
 
 function AdminHeader({ section, setSection, onLogout, setPage, alerts }) {
   return (
-    <div style={{ background: B.dark }}>
+    <div className="admin-header-shell" style={{ background: B.dark }}>
       <div style={{ maxWidth: 1220, margin: "0 auto", padding: "0 16px" }}>
-        <div style={{ height: 62, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 18, flexWrap: "wrap" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+        <div className="admin-header" style={{ height: 62, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 18, flexWrap: "wrap" }}>
+          <div className="admin-brand-row" style={{ display: "flex", alignItems: "center", gap: 16 }}>
             <Logo sm />
             <div style={{ width: 1, height: 22, background: "rgba(255,255,255,.15)" }} />
             <span style={{ fontSize: ".8rem", color: "rgba(255,255,255,.68)", fontWeight: 700 }}>Operations Dashboard</span>
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-            {alerts > 0 && <span style={{ fontSize: ".74rem", color: B.tan, fontWeight: 700 }}>{alerts} jobs need attention</span>}
-            <button onClick={() => setPage("home")} style={{ background: "none", border: "1px solid rgba(255,255,255,.2)", color: "rgba(255,255,255,.7)", padding: "6px 12px", borderRadius: 6, cursor: "pointer", fontSize: ".76rem", fontFamily: "inherit" }}>
+          <div className="admin-actions" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            {alerts > 0 && <span className="admin-alert" style={{ fontSize: ".74rem", color: B.tan, fontWeight: 700 }}>{alerts} jobs need attention</span>}
+            <button className="admin-action-button" onClick={() => setPage("home")} style={{ background: "none", border: "1px solid rgba(255,255,255,.2)", color: "rgba(255,255,255,.7)", padding: "6px 12px", borderRadius: 6, cursor: "pointer", fontSize: ".76rem", fontFamily: "inherit" }}>
               <i className="ti ti-world" style={{ marginRight: 5, fontSize: 12 }} aria-hidden="true" />View Site
             </button>
-            <button onClick={onLogout} style={{ background: "none", border: "1px solid rgba(255,255,255,.2)", color: "rgba(255,255,255,.7)", padding: "6px 12px", borderRadius: 6, cursor: "pointer", fontSize: ".76rem", fontFamily: "inherit" }}>
+            <button className="admin-action-button" onClick={onLogout} style={{ background: "none", border: "1px solid rgba(255,255,255,.2)", color: "rgba(255,255,255,.7)", padding: "6px 12px", borderRadius: 6, cursor: "pointer", fontSize: ".76rem", fontFamily: "inherit" }}>
               <i className="ti ti-logout" style={{ marginRight: 5, fontSize: 12 }} aria-hidden="true" />Sign Out
             </button>
           </div>
         </div>
-        <div style={{ display: "flex", gap: 8, overflowX: "auto", padding: "0 0 14px" }}>
+        <div className="admin-tabs" style={{ display: "flex", gap: 8, overflowX: "auto", padding: "0 0 14px" }}>
           {ADMIN_SECTIONS.map(item => (
-            <button key={item.id} onClick={() => setSection(item.id)} style={{ padding: "8px 12px", borderRadius: 6, border: "1px solid rgba(255,255,255,.1)", background: section === item.id ? "rgba(255,255,255,.14)" : "rgba(255,255,255,.04)", color: section === item.id ? B.white : "rgba(255,255,255,.65)", cursor: "pointer", fontSize: ".78rem", fontWeight: 700, fontFamily: "inherit", whiteSpace: "nowrap" }}>
+            <button className="admin-tab-button" key={item.id} onClick={() => setSection(item.id)} style={{ padding: "8px 12px", borderRadius: 6, border: "1px solid rgba(255,255,255,.1)", background: section === item.id ? "rgba(255,255,255,.14)" : "rgba(255,255,255,.04)", color: section === item.id ? B.white : "rgba(255,255,255,.65)", cursor: "pointer", fontSize: ".78rem", fontWeight: 700, fontFamily: "inherit", whiteSpace: "nowrap" }}>
               <i className={`ti ${item.icon}`} style={{ marginRight: 6, fontSize: 13 }} aria-hidden="true" />
               {item.label}
             </button>
@@ -515,7 +515,7 @@ function SummaryCards({ tickets, jobs, events, conflicts }) {
     { label: "Delayed jobs", value: delayed, icon: "ti-clock-exclamation", color: "#6C3483" },
   ];
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(170px,1fr))", gap: 12, marginBottom: 18 }}>
+    <div className="admin-card-grid admin-summary-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(170px,1fr))", gap: 12, marginBottom: 18 }}>
       {cards.map(card => (
         <Card key={card.label} style={{ padding: 16 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
@@ -869,20 +869,20 @@ function CalendarSection({ jobs, crews, builders, onOpenJob, pendingResidentialD
   return (
     <>
       <Card style={{ marginBottom: 14 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <div className="calendar-controls" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
           <div>
             <h1 style={{ fontSize: "1.25rem", fontWeight: 700, color: B.dark, marginBottom: 4 }}>Calendar Schedule</h1>
             <p style={{ fontSize: ".8rem", color: B.gray }}>View residential jobs and builder slab phases by month, week, or day with crew and builder filters.</p>
           </div>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <div className="calendar-view-toggle" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             {["month", "week", "day"].map(item => (
-              <button key={item} onClick={() => setView(item)} style={{ padding: "8px 12px", borderRadius: 6, border: `1.5px solid ${view === item ? B.green : B.border}`, background: view === item ? "#deeade" : B.white, color: view === item ? B.green : B.mid, fontWeight: 700, fontSize: ".76rem", cursor: "pointer", fontFamily: "inherit", textTransform: "capitalize" }}>
+              <button className="oak-button" key={item} onClick={() => setView(item)} style={{ padding: "8px 12px", borderRadius: 6, border: `1.5px solid ${view === item ? B.green : B.border}`, background: view === item ? "#e9e0ca" : B.white, color: view === item ? B.green : B.mid, fontWeight: 700, fontSize: ".76rem", cursor: "pointer", fontFamily: "inherit", textTransform: "capitalize" }}>
                 {item}
               </button>
             ))}
           </div>
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))", gap: 10, marginTop: 12 }}>
+        <div className="calendar-filters" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))", gap: 10, marginTop: 12 }}>
           <select value={filters.crewId} onChange={e => setFilters(prev => ({ ...prev, crewId: e.target.value }))} style={{ ...INP, cursor: "pointer" }}>
             <option value="All">All crews</option>
             {crews.map(crew => <option key={crew.id} value={crew.id}>{crew.name}</option>)}
@@ -903,10 +903,10 @@ function CalendarSection({ jobs, crews, builders, onOpenJob, pendingResidentialD
         </div>
       </Card>
 
-      <div style={{ display: "grid", gridTemplateColumns: schedulingLocked ? "minmax(0,1fr) 320px" : "1fr", gap: 14 }}>
-      <Card>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      <div className="calendar-layout" style={{ display: "grid", gridTemplateColumns: schedulingLocked ? "minmax(0,1fr) 320px" : "1fr", gap: 14 }}>
+      <Card className="admin-section-card calendar-main-card">
+        <div className="calendar-controls" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+          <div className="calendar-nav-controls" style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <Btn sm v="outline" onClick={() => shiftView(-1)}><i className="ti ti-chevron-left" aria-hidden="true" /></Btn>
             <Btn sm v="outline" onClick={() => setAnchorDate(todayIso())}>Today</Btn>
             <Btn sm v="outline" onClick={() => shiftView(1)}><i className="ti ti-chevron-right" aria-hidden="true" /></Btn>
@@ -919,17 +919,18 @@ function CalendarSection({ jobs, crews, builders, onOpenJob, pendingResidentialD
         </div>
 
         {view === "month" && (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(7,minmax(0,1fr))", gap: 8 }}>
+          <div className="calendar-scroll-wrapper">
+          <div className="calendar-month-grid" style={{ display: "grid", gridTemplateColumns: "repeat(7,minmax(0,1fr))", gap: 8 }}>
             {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map(day => <div key={day} style={{ fontSize: ".72rem", color: B.gray, fontWeight: 700, textTransform: "uppercase", padding: "0 4px 4px" }}>{day}</div>)}
             {monthDays.map(day => (
-              <div key={day.iso} onClick={() => pickScheduleDate(day.iso)} style={{ minHeight: 124, border: `1px solid ${(pendingResidentialDraft?.scheduled_date === day.iso || pendingBuilderSchedule?.scheduled_date === day.iso) ? B.bronze : anchorDate === day.iso ? B.green : B.border}`, borderRadius: 8, padding: 8, background: day.inMonth ? B.white : "#FAFAF8", cursor: "pointer", boxShadow: (pendingResidentialDraft?.scheduled_date === day.iso || pendingBuilderSchedule?.scheduled_date === day.iso) ? `inset 0 0 0 1px ${B.bronze}` : "none" }}>
+              <div className="calendar-day-card" key={day.iso} onClick={() => pickScheduleDate(day.iso)} style={{ minHeight: 124, border: `1px solid ${(pendingResidentialDraft?.scheduled_date === day.iso || pendingBuilderSchedule?.scheduled_date === day.iso) ? B.bronze : anchorDate === day.iso ? B.green : B.border}`, borderRadius: 8, padding: 8, background: day.inMonth ? B.white : "#FAFAF8", cursor: "pointer", boxShadow: (pendingResidentialDraft?.scheduled_date === day.iso || pendingBuilderSchedule?.scheduled_date === day.iso) ? `inset 0 0 0 1px ${B.bronze}` : "none" }}>
                 <div style={{ fontSize: ".74rem", fontWeight: 700, color: isWeekend(day.iso) ? "#922B21" : B.dark, marginBottom: 8, display: "flex", justifyContent: "space-between" }}>
                   <span>{new Date(`${day.iso}T12:00:00`).getDate()}</span>
                   <span style={{ color: (pendingResidentialDraft?.scheduled_date === day.iso || pendingBuilderSchedule?.scheduled_date === day.iso) ? B.bronze : B.gray }}>{day.events.length > 0 ? day.events.length : (pendingResidentialDraft?.scheduled_date === day.iso || pendingBuilderSchedule?.scheduled_date === day.iso) ? "Pick" : ""}</span>
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                   {day.events.slice(0, 3).map(event => (
-                    <button key={event.id} onClick={e => { e.stopPropagation(); if (!schedulingLocked) onOpenJob(event.jobId); }} style={{ background: eventColor(event), color: B.white, border: "none", borderRadius: 6, fontSize: ".66rem", padding: "4px 6px", textAlign: "left", cursor: schedulingLocked ? "default" : "pointer" }}>
+                    <button className="calendar-event" key={event.id} onClick={e => { e.stopPropagation(); if (!schedulingLocked) onOpenJob(event.jobId); }} style={{ background: eventColor(event), color: B.white, border: "none", borderRadius: 6, fontSize: ".66rem", padding: "4px 6px", textAlign: "left", cursor: schedulingLocked ? "default" : "pointer" }}>
                       <div style={{ fontWeight: 700 }}>{event.customer_name || `${event.builder_name} Lot ${event.lot_number}`}</div>
                       <div style={{ opacity: .85 }}>{event.time} Â· Crew {findCrewById(crews, event.crew_id)?.number || "-"}</div>
                     </button>
@@ -939,17 +940,19 @@ function CalendarSection({ jobs, crews, builders, onOpenJob, pendingResidentialD
               </div>
             ))}
           </div>
+          </div>
         )}
 
         {view === "week" && (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(7,minmax(0,1fr))", gap: 10 }}>
+          <div className="calendar-scroll-wrapper">
+          <div className="calendar-week-grid" style={{ display: "grid", gridTemplateColumns: "repeat(7,minmax(0,1fr))", gap: 10 }}>
             {weekDays.map(day => (
-              <div key={day.iso} onClick={() => pickScheduleDate(day.iso)} style={{ border: `1px solid ${(pendingResidentialDraft?.scheduled_date === day.iso || pendingBuilderSchedule?.scheduled_date === day.iso) ? B.bronze : anchorDate === day.iso ? B.green : B.border}`, borderRadius: 8, padding: 10, minHeight: 260, cursor: "pointer" }}>
+              <div className="calendar-day-card" key={day.iso} onClick={() => pickScheduleDate(day.iso)} style={{ border: `1px solid ${(pendingResidentialDraft?.scheduled_date === day.iso || pendingBuilderSchedule?.scheduled_date === day.iso) ? B.bronze : anchorDate === day.iso ? B.green : B.border}`, borderRadius: 8, padding: 10, minHeight: 260, cursor: "pointer" }}>
                 <div style={{ fontSize: ".76rem", fontWeight: 700, color: isWeekend(day.iso) ? "#922B21" : B.dark, marginBottom: 8 }}>{fmtDateShort(day.iso)}</div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                   {day.events.length === 0 && <div style={{ fontSize: ".72rem", color: B.gray }}>No scheduled work.</div>}
                   {day.events.map(event => (
-                    <button key={event.id} onClick={e => { e.stopPropagation(); if (!schedulingLocked) onOpenJob(event.jobId); }} style={{ background: `${eventColor(event)}14`, color: B.dark, border: `1px solid ${eventColor(event)}30`, borderRadius: 6, padding: "8px 9px", textAlign: "left", cursor: schedulingLocked ? "default" : "pointer" }}>
+                    <button className="calendar-event" key={event.id} onClick={e => { e.stopPropagation(); if (!schedulingLocked) onOpenJob(event.jobId); }} style={{ background: `${eventColor(event)}14`, color: B.dark, border: `1px solid ${eventColor(event)}30`, borderRadius: 6, padding: "8px 9px", textAlign: "left", cursor: schedulingLocked ? "default" : "pointer" }}>
                       <div style={{ fontSize: ".72rem", fontWeight: 700 }}>{event.customer_name || `${event.builder_name} Lot ${event.lot_number}`}</div>
                       <div style={{ fontSize: ".7rem", color: B.gray }}>{event.phase_label}</div>
                       <div style={{ fontSize: ".68rem", color: B.gray }}>{event.time} · Crew {findCrewById(crews, event.crew_id)?.number || "-"}</div>
@@ -959,6 +962,7 @@ function CalendarSection({ jobs, crews, builders, onOpenJob, pendingResidentialD
               </div>
             ))}
           </div>
+          </div>
         )}
 
         {view === "day" && (
@@ -966,7 +970,7 @@ function CalendarSection({ jobs, crews, builders, onOpenJob, pendingResidentialD
             {schedulingLocked && <button onClick={() => pickScheduleDate(anchorDate)} style={{ alignSelf: "flex-start", background: `${B.bronze}12`, border: `1px solid ${B.bronze}40`, color: B.bronze, borderRadius: 6, padding: "8px 12px", cursor: "pointer", fontFamily: "inherit", fontWeight: 700, fontSize: ".76rem" }}>Use {fmtDate(anchorDate)} for this job</button>}
             {dayEvents.length === 0 && <div style={{ fontSize: ".82rem", color: B.gray }}>No work scheduled for {fmtDate(anchorDate)}.</div>}
             {dayEvents.map(event => (
-              <Card key={event.id} style={{ padding: 14, background: `${eventColor(event)}10`, borderColor: `${eventColor(event)}35` }}>
+              <Card key={event.id} className="calendar-event" style={{ padding: 14, background: `${eventColor(event)}10`, borderColor: `${eventColor(event)}35` }}>
                 <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
                   <div>
                     <div style={{ fontSize: ".86rem", fontWeight: 700, color: B.dark }}>{event.customer_name || `${event.builder_name} Lot ${event.lot_number}`}</div>
@@ -984,7 +988,7 @@ function CalendarSection({ jobs, crews, builders, onOpenJob, pendingResidentialD
         )}
       </Card>
       {pendingResidentialDraft && (
-        <Card style={{ alignSelf: "start", position: "sticky", top: 18 }}>
+        <Card className="calendar-side-panel admin-section-card" style={{ alignSelf: "start", position: "sticky", top: 18 }}>
           <div style={{ fontSize: ".82rem", fontWeight: 700, color: B.dark, textTransform: "uppercase", letterSpacing: .5, marginBottom: 10 }}>Schedule Residential Job</div>
           <div style={{ fontSize: ".88rem", fontWeight: 700, color: B.dark, marginBottom: 4 }}>{pendingResidentialDraft.customer_name}</div>
           <div style={{ fontSize: ".76rem", color: B.gray, marginBottom: 12 }}>{pendingResidentialDraft.job_type}</div>
@@ -1034,7 +1038,7 @@ function CalendarSection({ jobs, crews, builders, onOpenJob, pendingResidentialD
         </Card>
       )}
       {pendingBuilderSchedule && (
-        <Card style={{ alignSelf: "start", position: "sticky", top: 18 }}>
+        <Card className="calendar-side-panel admin-section-card" style={{ alignSelf: "start", position: "sticky", top: 18 }}>
           <div style={{ fontSize: ".82rem", fontWeight: 700, color: B.dark, textTransform: "uppercase", letterSpacing: .5, marginBottom: 10 }}>Schedule Builder Job</div>
           <div style={{ fontSize: ".88rem", fontWeight: 700, color: B.dark, marginBottom: 4 }}>{pendingBuilderSchedule.builder_name}</div>
           <div style={{ fontSize: ".76rem", color: B.gray, marginBottom: 12 }}>{pendingBuilderSchedule.community} · Lot {pendingBuilderSchedule.lot_number}</div>
@@ -2113,10 +2117,10 @@ export default function AdminWorkspace({ tickets, onUpdateTicket, onLogout, setP
   })();
 
   return (
-    <div style={{ minHeight: "100vh", background: "#F0F2F5" }}>
+    <div className="admin-page-shell" style={{ minHeight: "100vh", background: "#F0F2F5" }}>
       {!selectedTicket && !selectedJob && <AdminHeader section={section} setSection={setSection} onLogout={onLogout} setPage={setPage} alerts={jobsNeedingAttention} />}
       {!selectedTicket && !selectedJob && (
-        <div style={{ maxWidth: 1220, margin: "0 auto", padding: "22px 16px 60px" }}>
+        <div className="admin-content-shell" style={{ maxWidth: 1220, margin: "0 auto", padding: "22px 16px 60px" }}>
           <SummaryCards tickets={tickets} jobs={jobs} events={allEvents} conflicts={activeConflicts} />
           {content}
         </div>

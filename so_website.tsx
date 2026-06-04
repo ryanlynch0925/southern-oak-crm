@@ -19,10 +19,10 @@ import AdminWorkspace from "./src/adminDashboard";
 // ─────────────────────────────────────────────────────────────────────────────
 
 const B = {
-  dark:"#1A1A1A", dark2:"#252525", mid:"#3A3A3A", gray:"#696969",
-  lgray:"#A8A094", border:"#DDD5C5", sand:"#F5F0E8", sandD:"#EDE5D3",
-  tan:"#C4A882", bronze:"#8B6914", bronzeL:"#B8900F",
-  green:"#2D4A2D", green2:"#3A5C3A", white:"#FFFFFF",
+  dark:"#16130D", dark2:"#121A10", mid:"#4A382B", gray:"#6F5A32",
+  lgray:"#CBB895", border:"rgba(212,180,125,.25)", sand:"#F3E8D0", sandD:"#E7D5B2",
+  tan:"#D4B47D", bronze:"#9A741A", bronzeL:"#B98A2E",
+  green:"#172315", green2:"#25301E", white:"#FFF8EA",
 };
 
 const BRAND_LOGO_SRC = `${import.meta.env.BASE_URL}branding/main_logo.png`;
@@ -118,6 +118,10 @@ function Logo({light=true, sm=false}) {
   );
 }
 
+function Wordmark() {
+  return <span className="public-wordmark">Southern Oak Construction</span>;
+}
+
 function Pill({label, status}) {
   const cfg = STAT[status]||{c:"#555",bg:"#eee"};
   return <span style={{display:"inline-block",padding:"3px 10px",borderRadius:20,background:cfg.bg,color:cfg.c,fontWeight:700,fontSize:".68rem",whiteSpace:"nowrap"}}>{label||status}</span>;
@@ -134,7 +138,7 @@ function SBtn({children,onClick,v="primary",sm=false,full=false,style={}}) {
     danger:{background:"#C0392B",color:B.white,border:"none"},
     success:{background:"#1E8449",color:B.white,border:"none"},
   };
-  return <button onClick={onClick} style={{padding:pads,borderRadius:6,fontSize:sm?".78rem":".88rem",fontWeight:700,cursor:"pointer",fontFamily:"inherit",display:full?"block":"inline-block",width:full?"100%":undefined,textAlign:"center",...(vs[v]||vs.primary),...style}}>{children}</button>;
+  return <button className={`oak-button oak-button--${v}`} onClick={onClick} style={{padding:pads,borderRadius:6,fontSize:sm?".78rem":".88rem",fontWeight:700,cursor:"pointer",fontFamily:"inherit",display:full?"block":"inline-block",width:full?"100%":undefined,textAlign:"center",...(vs[v]||vs.primary),...style}}>{children}</button>;
 }
 
 function Pills2({label,value,onChange,opts}) {
@@ -155,10 +159,10 @@ function Nav({page, setPage, adminMode, setAdminMode}) {
   const [open,setOpen] = useState(false);
   const links = [{k:"home",l:"Home"},{k:"services",l:"Services"},{k:"gallery",l:"Gallery"},{k:"about",l:"About"},{k:"contact",l:"Contact"}];
   return (
-    <div style={{background:B.dark,borderBottom:"1px solid rgba(255,255,255,.06)"}}>
+    <div className="public-nav" style={{background:B.dark,borderBottom:"1px solid rgba(212,180,125,.16)"}}>
       <div style={{maxWidth:1100,margin:"0 auto",padding:"0 16px",display:"flex",alignItems:"center",justifyContent:"space-between",height:64}}>
-        <div onClick={()=>{setPage("home");setAdminMode(false);}}><Logo/></div>
-        <div style={{display:"flex",alignItems:"center",gap:6}}>
+        <div className="public-brand" onClick={()=>{setPage("home");setAdminMode(false);}}><Wordmark/></div>
+        <div className="public-nav-actions" style={{display:"flex",alignItems:"center",gap:6}}>
           {links.map(l=><button key={l.k} className="desktopNav" onClick={()=>{setPage(l.k);setOpen(false);}} style={{background:"none",border:"none",color:page===l.k?B.tan:"rgba(255,255,255,.7)",fontWeight:page===l.k?700:500,fontSize:".82rem",cursor:"pointer",padding:"6px 10px",fontFamily:"inherit"}}>
             {l.l}
           </button>)}
@@ -176,7 +180,7 @@ function Nav({page, setPage, adminMode, setAdminMode}) {
           </button>
         </div>
       </div>
-      {open&&<div style={{background:B.dark2,borderTop:"1px solid rgba(255,255,255,.08)",padding:"8px 16px 12px"}}>
+      {open&&<div className="public-mobile-menu" style={{background:B.dark2,borderTop:"1px solid rgba(212,180,125,.12)",padding:"8px 16px 12px"}}>
         {links.map(l=><div key={l.k} onClick={()=>{setPage(l.k);setOpen(false);}} style={{padding:"10px 0",color:page===l.k?B.tan:"rgba(255,255,255,.8)",fontWeight:600,fontSize:".88rem",cursor:"pointer",borderBottom:"1px solid rgba(255,255,255,.06)"}}>{l.l}</div>)}
         <div onClick={()=>{setAdminMode(true);setOpen(false);}} style={{padding:"10px 0",color:"rgba(255,255,255,.5)",fontWeight:600,fontSize:".8rem",cursor:"pointer"}}>
           <i className="ti ti-shield-lock" style={{marginRight:6,fontSize:13}} aria-hidden="true"/>Admin Login

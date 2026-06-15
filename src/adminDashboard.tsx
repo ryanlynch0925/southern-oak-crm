@@ -534,11 +534,11 @@ function AdminSidebar({ section, setSection, financeView, setFinanceView, alerts
   return (
     <>
       {mobileOpen && <button onClick={onClose} aria-label="Close navigation" style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.42)", border: "none", padding: 0, zIndex: 3090 }} />}
-      <aside className={`admin-sidebar${mobileOpen ? " is-open" : ""}`} style={{ background: "linear-gradient(180deg,var(--oak-black),var(--oak-deep-green))", color: "var(--oak-cream)" }}>
+      <aside className={`admin-sidebar${mobileOpen ? " is-open" : ""}`} style={{ background: "linear-gradient(180deg,var(--oak-black),var(--oak-deep-green))", color: "var(--oak-cream)", display: "flex", flexDirection: "column" }}>
         <div style={{ padding: 20, borderBottom: "1px solid rgba(243,232,208,.08)" }}>
           <SidebarBrand />
         </div>
-        <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 8 }}>
+        <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 8, flex: 1 }}>
           {alerts > 0 && (
             <div style={{ padding: "10px 12px", borderRadius: 10, background: "rgba(154,116,26,.12)", color: "var(--oak-tan)", fontSize: ".78rem", fontWeight: 700 }}>
               {alerts} jobs need attention
@@ -547,72 +547,77 @@ function AdminSidebar({ section, setSection, financeView, setFinanceView, alerts
           {ADMIN_SECTIONS.map(item => {
             const active = section === item.id;
             return (
-              <button
-                key={item.id}
-                onClick={() => {
-                  setSection(item.id);
-                  onClose();
-                }}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 10,
-                  width: "100%",
-                  minHeight: 44,
-                  padding: "10px 12px",
-                  borderRadius: 10,
-                  border: `1px solid ${active ? "rgba(154,116,26,.32)" : "rgba(243,232,208,.08)"}`,
-                  background: active ? "rgba(154,116,26,.14)" : "transparent",
-                  color: active ? "var(--oak-cream)" : "rgba(243,232,208,.78)",
-                  cursor: "pointer",
-                  fontFamily: "inherit",
-                  fontWeight: 700,
-                  fontSize: ".82rem",
-                  textAlign: "left",
-                }}
-              >
-                <i className={`ti ${item.icon}`} style={{ fontSize: 16 }} aria-hidden="true" />
-                <span>{item.label}</span>
-              </button>
+              <div key={item.id} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                <button
+                  onClick={() => {
+                    setSection(item.id);
+                    onClose();
+                  }}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 10,
+                    width: "100%",
+                    minHeight: 44,
+                    padding: "10px 12px",
+                    borderRadius: 10,
+                    border: `1px solid ${active ? "rgba(154,116,26,.32)" : "rgba(243,232,208,.08)"}`,
+                    background: active ? "rgba(154,116,26,.14)" : "transparent",
+                    color: active ? "var(--oak-cream)" : "rgba(243,232,208,.78)",
+                    cursor: "pointer",
+                    fontFamily: "inherit",
+                    fontWeight: 700,
+                    fontSize: ".82rem",
+                    textAlign: "left",
+                  }}
+                >
+                  <i className={`ti ${item.icon}`} style={{ fontSize: 16 }} aria-hidden="true" />
+                  <span>{item.label}</span>
+                </button>
+                {item.id === "finance" && section === "finance" && (
+                  <div style={{ marginLeft: 10, display: "flex", flexDirection: "column", gap: 6, paddingLeft: 12, borderLeft: "1px solid rgba(243,232,208,.14)" }}>
+                    {[
+                      { id: "overview", label: "Overview" },
+                      { id: "revenue", label: "Revenue" },
+                      { id: "payments", label: "Payments" },
+                      { id: "reports", label: "Reports" },
+                    ].map(financeItem => {
+                      const financeActive = financeView === financeItem.id;
+                      return (
+                        <button
+                          key={financeItem.id}
+                          onClick={() => {
+                            setSection("finance");
+                            setFinanceView(financeItem.id);
+                            onClose();
+                          }}
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 8,
+                            minHeight: 40,
+                            padding: "8px 10px",
+                            borderRadius: 8,
+                            border: "none",
+                            background: financeActive ? "rgba(23,35,21,.48)" : "transparent",
+                            color: financeActive ? "var(--oak-tan)" : "rgba(243,232,208,.68)",
+                            cursor: "pointer",
+                            fontFamily: "inherit",
+                            fontWeight: 700,
+                            fontSize: ".76rem",
+                            textAlign: "left",
+                          }}
+                        >
+                          <span style={{ width: 6, height: 6, borderRadius: 999, background: financeActive ? "var(--oak-gold)" : "rgba(243,232,208,.24)", display: "inline-block" }} />
+                          {financeItem.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             );
           })}
-          {section === "finance" && (
-            <div style={{ marginTop: 4, marginLeft: 10, display: "flex", flexDirection: "column", gap: 6, paddingLeft: 12, borderLeft: "1px solid rgba(243,232,208,.14)" }}>
-              {[
-                { id: "overview", label: "Overview" },
-                { id: "revenue", label: "Revenue" },
-                { id: "payments", label: "Payments" },
-                { id: "reports", label: "Reports" },
-              ].map(item => {
-                const active = financeView === item.id;
-                return (
-                  <button
-                    key={item.id}
-                    onClick={() => setFinanceView(item.id)}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 8,
-                      minHeight: 40,
-                      padding: "8px 10px",
-                      borderRadius: 8,
-                      border: "none",
-                      background: active ? "rgba(23,35,21,.48)" : "transparent",
-                      color: active ? "var(--oak-tan)" : "rgba(243,232,208,.68)",
-                      cursor: "pointer",
-                      fontFamily: "inherit",
-                      fontWeight: 700,
-                      fontSize: ".76rem",
-                      textAlign: "left",
-                    }}
-                  >
-                    <span style={{ width: 6, height: 6, borderRadius: 999, background: active ? "var(--oak-gold)" : "rgba(243,232,208,.24)", display: "inline-block" }} />
-                    {item.label}
-                  </button>
-                );
-              })}
-            </div>
-          )}
         </div>
       </aside>
     </>

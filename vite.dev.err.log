@@ -1,0 +1,48 @@
+[2m3:49:45 PM[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m [31m[Unhandled error] [1mReferenceError[22m: statusChartRows is not defined
+[39m > FinanceDashboard ../../../../southern-oak-crm/src/adminFinanceDashboard.tsx?t=1780602584547:1124:13
+ > renderWithHooks ../../../../southern-oak-crm/node_modules/.vite/deps/react-dom-CcnZupb6.js?v=18f11269:9631:19
+ > updateFunctionComponent ../../../../southern-oak-crm/node_modules/.vite/deps/react-dom-CcnZupb6.js?v=18f11269:12121:19
+ > beginWork ../../../../southern-oak-crm/node_modules/.vite/deps/react-dom-CcnZupb6.js?v=18f11269:13095:13
+ > HTMLUnknownElement.callCallback ../../../../southern-oak-crm/node_modules/.vite/deps/react-dom-CcnZupb6.js?v=18f11269:3141:11
+ > Object.invokeGuardedCallbackDev ../../../../southern-oak-crm/node_modules/.vite/deps/react-dom-CcnZupb6.js?v=18f11269:3161:14
+ > invokeGuardedCallback ../../../../southern-oak-crm/node_modules/.vite/deps/react-dom-CcnZupb6.js?v=18f11269:3200:32
+ > beginWork$1 ../../../../southern-oak-crm/node_modules/.vite/deps/react-dom-CcnZupb6.js?v=18f11269:15989:5
+ > performUnitOfWork ../../../../southern-oak-crm/node_modules/.vite/deps/react-dom-CcnZupb6.js?v=18f11269:15567:12
+ > workLoopSync ../../../../southern-oak-crm/node_modules/.vite/deps/react-dom-CcnZupb6.js?v=18f11269:15516:36
+
+[2m3:49:45 PM[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m [31m[Unhandled error] [1mReferenceError[22m: statusChartRows is not defined
+[39m > FinanceDashboard ../../../../southern-oak-crm/src/adminFinanceDashboard.tsx?t=1780602584547:1124:13
+ > renderWithHooks ../../../../southern-oak-crm/node_modules/.vite/deps/react-dom-CcnZupb6.js?v=18f11269:9631:19
+ > updateFunctionComponent ../../../../southern-oak-crm/node_modules/.vite/deps/react-dom-CcnZupb6.js?v=18f11269:12121:19
+ > beginWork ../../../../southern-oak-crm/node_modules/.vite/deps/react-dom-CcnZupb6.js?v=18f11269:13095:13
+ > HTMLUnknownElement.callCallback ../../../../southern-oak-crm/node_modules/.vite/deps/react-dom-CcnZupb6.js?v=18f11269:3141:11
+ > Object.invokeGuardedCallbackDev ../../../../southern-oak-crm/node_modules/.vite/deps/react-dom-CcnZupb6.js?v=18f11269:3161:14
+ > invokeGuardedCallback ../../../../southern-oak-crm/node_modules/.vite/deps/react-dom-CcnZupb6.js?v=18f11269:3200:32
+ > beginWork$1 ../../../../southern-oak-crm/node_modules/.vite/deps/react-dom-CcnZupb6.js?v=18f11269:15989:5
+ > performUnitOfWork ../../../../southern-oak-crm/node_modules/.vite/deps/react-dom-CcnZupb6.js?v=18f11269:15567:12
+ > workLoopSync ../../../../southern-oak-crm/node_modules/.vite/deps/react-dom-CcnZupb6.js?v=18f11269:15516:36
+
+[2m3:49:45 PM[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m [2m[console.error] [22mThe above error occurred in the <FinanceDashboard> component:
+
+    at FinanceDashboard (http://127.0.0.1:4174/southern-oak-crm/src/adminFinanceDashboard.tsx?t=1780602584547:783:29)
+    at div
+    at div
+    at div
+    at div
+    at AdminWorkspace (http://127.0.0.1:4174/southern-oak-crm/src/adminDashboard.tsx?t=1780602554106:8323:42)
+    at App (http://127.0.0.1:4174/southern-oak-crm/so_website.tsx:7063:26)
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://reactjs.org/link/error-boundaries to learn more about error boundaries.
+[2m3:49:45 PM[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m [31m[Unhandled rejection] [1mReferenceError[22m: statusChartRows is not defined
+[39m > FinanceDashboard ../../../../southern-oak-crm/src/adminFinanceDashboard.tsx?t=1780602584547:1124:13
+ > renderWithHooks ../../../../southern-oak-crm/node_modules/.vite/deps/react-dom-CcnZupb6.js?v=18f11269:9631:19
+ > updateFunctionComponent ../../../../southern-oak-crm/node_modules/.vite/deps/react-dom-CcnZupb6.js?v=18f11269:12121:19
+ > beginWork ../../../../southern-oak-crm/node_modules/.vite/deps/react-dom-CcnZupb6.js?v=18f11269:13095:13
+ > beginWork$1 ../../../../southern-oak-crm/node_modules/.vite/deps/react-dom-CcnZupb6.js?v=18f11269:15981:12
+ > performUnitOfWork ../../../../southern-oak-crm/node_modules/.vite/deps/react-dom-CcnZupb6.js?v=18f11269:15567:12
+ > workLoopSync ../../../../southern-oak-crm/node_modules/.vite/deps/react-dom-CcnZupb6.js?v=18f11269:15516:36
+ > renderRootSync ../../../../southern-oak-crm/node_modules/.vite/deps/react-dom-CcnZupb6.js?v=18f11269:15499:6
+ > recoverFromConcurrentError ../../../../southern-oak-crm/node_modules/.vite/deps/react-dom-CcnZupb6.js?v=18f11269:15192:21
+ > performSyncWorkOnRoot ../../../../southern-oak-crm/node_modules/.vite/deps/react-dom-CcnZupb6.js?v=18f11269:15303:19
+

@@ -136,8 +136,9 @@ a {
 .admin-sidebar {
   position: sticky;
   top: 0;
-  align-self: start;
+  align-self: stretch;
   min-height: 100vh;
+  height: 100%;
   border-right: 1px solid rgba(243, 232, 208, 0.08);
   z-index: 3100;
 }

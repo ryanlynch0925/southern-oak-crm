@@ -63,6 +63,10 @@ const ESTIMATE_STATUSES = [
   "New Request",
   "Needs Review",
   "Rough Estimate Sent",
+  "Interested",
+  "Site Visit Requested",
+  "Follow Up Needed",
+  "Declined",
   "Site Visit Needed",
   "Scheduled",
   "Final Quote Sent",
@@ -86,6 +90,10 @@ const STATUS_STYLES = {
   "New Request": { c: "#275A85", bg: "#E8F1FA" },
   "Needs Review": { c: "#7C6320", bg: "#F7F1DF" },
   "Rough Estimate Sent": { c: "#6A4D8E", bg: "#F1ECF8" },
+  Interested: { c: "#25603C", bg: "#E6F3EA" },
+  "Site Visit Requested": { c: "#1E8449", bg: "#DCF3E4" },
+  "Follow Up Needed": { c: "#9C640C", bg: "#FCF3CF" },
+  Declined: { c: "#5F645D", bg: "#ECEEE9" },
   "Site Visit Needed": { c: "#A14B40", bg: "#F9E8E4" },
   Scheduled: { c: "#25603C", bg: "#E6F3EA" },
   "Final Quote Sent": { c: "#275A85", bg: "#E8F1FA" },
@@ -98,6 +106,13 @@ const STATUS_STYLES = {
   Won: { c: "#25603C", bg: "#DFF0E5" },
   Lost: { c: "#5F645D", bg: "#ECEEE9" },
   Pending: { c: "#586455", bg: "#EEF1EC" },
+};
+const YES_DECISION_STATUSES = new Set(["Interested", "Site Visit Requested"]);
+const NO_DECISION_STATUSES = new Set(["Follow Up Needed", "Declined"]);
+const DECISION_STYLES = {
+  yes: { label: "Yes / Interested", short: "Yes", c: "#25603C", bg: "#E6F3EA" },
+  no: { label: "No / Follow Up Needed", short: "No", c: "#9C640C", bg: "#FCF3CF" },
+  pending: { label: "Awaiting decision", short: "Pending", c: "#5F645D", bg: "#F3F4F2" },
 };
 
 const RESPONSIBLE_PARTIES = [
@@ -150,6 +165,16 @@ const fmtDate = iso => iso ? new Date(`${iso}T12:00:00`).toLocaleDateString("en-
 const fmtDateShort = iso => iso ? new Date(`${iso}T12:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "-";
 const fmtTime = value => value || "-";
 const fmtMoney = n => n != null ? `$${Number(n).toLocaleString()}` : "-";
+const getDecisionCategory = ticket => {
+  if (ticket.estimateDecision === "yes" || YES_DECISION_STATUSES.has(ticket.status)) return "yes";
+  if (ticket.estimateDecision === "no" || NO_DECISION_STATUSES.has(ticket.status)) return "no";
+  return "pending";
+};
+const getDecisionStyle = ticket => DECISION_STYLES[getDecisionCategory(ticket)];
+const getLatestNotification = ticket => {
+  const notifications = ticket.notifications || [];
+  return notifications.length ? notifications[notifications.length - 1] : null;
+};
 const fmtCap = n => `${Number(n || 0).toFixed(Number(n || 0) % 1 ? 2 : 0)} day`;
 const clampDateValue = d => new Date(`${d}T12:00:00`);
 const getDayOfWeek = d => clampDateValue(d).getDay();
@@ -221,6 +246,11 @@ function Btn({ children, onClick, v = "primary", sm = false, full = false, style
 function Pill({ status, label }) {
   const cfg = STATUS_STYLES[status] || { c: "#555", bg: "#eee" };
   return <span style={{ display: "inline-block", padding: "3px 10px", borderRadius: 20, background: cfg.bg, color: cfg.c, fontWeight: 700, fontSize: ".68rem", whiteSpace: "nowrap" }}>{label || status}</span>;
+}
+
+function DecisionPill({ ticket, short = false }) {
+  const cfg = getDecisionStyle(ticket);
+  return <span style={{ display: "inline-block", padding: "3px 10px", borderRadius: 20, background: cfg.bg, color: cfg.c, fontWeight: 700, fontSize: ".68rem", whiteSpace: "nowrap" }}>{short ? cfg.short : cfg.label}</span>;
 }
 
 function Card({ children, style = {}, className = "" }) {
@@ -651,7 +681,7 @@ function AdminTopBar({ section, financeView, onOpenMenu, onLogout, setPage }) {
 }
 
 function DashboardHomeSection({ tickets, jobs, events, conflicts, setSection }) {
-  const openReceivables = tickets.filter(ticket => ["Needs Review", "Estimate Accepted", "Ready to Schedule"].includes(ticket.status)).slice(0, 4);
+  const openReceivables = tickets.filter(ticket => ["Needs Review", "Interested", "Site Visit Requested", "Follow Up Needed", "Estimate Accepted", "Ready to Schedule"].includes(ticket.status)).slice(0, 4);
   const upcoming = events.filter(event => event.date >= todayIso()).slice(0, 5);
   return (
     <>
@@ -711,11 +741,15 @@ function DashboardHomeSection({ tickets, jobs, events, conflicts, setSection }) 
 
 function SummaryCards({ tickets, jobs, events, conflicts }) {
   const readyTickets = tickets.filter(ticket => ["Estimate Accepted", "Ready to Schedule"].includes(ticket.status)).length;
+  const warmLeads = tickets.filter(ticket => getDecisionCategory(ticket) === "yes").length;
+  const followUpLeads = tickets.filter(ticket => getDecisionCategory(ticket) === "no").length;
   const today = todayIso();
   const todayEvents = events.filter(event => event.date === today).length;
   const delayed = jobs.filter(job => job.status === "Delayed").length;
   const cards = [
     { label: "New requests", value: tickets.filter(ticket => ticket.status === "New Request").length, icon: "ti-bell", color: "#1A5276" },
+    { label: "Warm leads", value: warmLeads, icon: "ti-flame", color: "#1E8449" },
+    { label: "Follow up needed", value: followUpLeads, icon: "ti-phone-call", color: "#9C640C" },
     { label: "Ready to schedule", value: readyTickets, icon: "ti-calendar-plus", color: "#7D6608" },
     { label: "Work on calendar today", value: todayEvents, icon: "ti-calendar-event", color: "#1A5632" },
     { label: "Crew conflicts", value: conflicts.length, icon: "ti-alert-triangle", color: "#922B21" },
@@ -739,11 +773,13 @@ function SummaryCards({ tickets, jobs, events, conflicts }) {
 function EstimateTicketsSection({ tickets, onSelectTicket, onAcceptTicket, onScheduleTicket, jobs }) {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("All");
+  const [decisionFilter, setDecisionFilter] = useState("All");
   const [sortBy, setSortBy] = useState("date");
   const scheduledTicketIds = new Set(jobs.filter(job => job.sourceTicketId).map(job => job.sourceTicketId));
   const filtered = useMemo(() => {
     let list = tickets;
     if (statusFilter !== "All") list = list.filter(item => item.status === statusFilter);
+    if (decisionFilter !== "All") list = list.filter(item => getDecisionCategory(item) === decisionFilter);
     if (search.trim()) {
       const term = search.toLowerCase();
       list = list.filter(item => item.name.toLowerCase().includes(term) || item.city.toLowerCase().includes(term) || item.ptype.toLowerCase().includes(term) || item.id.toLowerCase().includes(term));
@@ -752,7 +788,7 @@ function EstimateTicketsSection({ tickets, onSelectTicket, onAcceptTicket, onSch
     if (sortBy === "amount") list = [...list].sort((a, b) => (b.rHigh || 0) - (a.rHigh || 0));
     if (sortBy === "followup") list = [...list].sort((a, b) => (a.followUp || "").localeCompare(b.followUp || ""));
     return list;
-  }, [tickets, statusFilter, search, sortBy]);
+  }, [tickets, statusFilter, decisionFilter, search, sortBy]);
 
   return (
     <>
@@ -767,6 +803,12 @@ function EstimateTicketsSection({ tickets, onSelectTicket, onAcceptTicket, onSch
               <option value="All">All statuses</option>
               {ESTIMATE_STATUSES.map(status => <option key={status} value={status}>{status}</option>)}
             </select>
+            <select value={decisionFilter} onChange={e => setDecisionFilter(e.target.value)} style={{ ...INP, width: "auto", cursor: "pointer" }}>
+              <option value="All">All decisions</option>
+              <option value="yes">Yes / Interested</option>
+              <option value="no">No / Follow Up Needed</option>
+              <option value="pending">Awaiting decision</option>
+            </select>
             <select value={sortBy} onChange={e => setSortBy(e.target.value)} style={{ ...INP, width: "auto", cursor: "pointer" }}>
               <option value="date">Newest first</option>
               <option value="amount">Largest estimate</option>
@@ -780,53 +822,77 @@ function EstimateTicketsSection({ tickets, onSelectTicket, onAcceptTicket, onSch
         </div>
       </Card>
 
-      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      <div className="estimate-ticket-list">
         {filtered.map(ticket => {
           const isScheduled = scheduledTicketIds.has(ticket.id);
+          const decision = getDecisionCategory(ticket);
+          const latestNotification = getLatestNotification(ticket);
+          const canAcceptEstimate = decision === "pending" && !["Estimate Accepted", "Ready to Schedule", "Scheduled", "Won", "Lost", "Declined"].includes(ticket.status);
           return (
-            <Card key={ticket.id} style={{ padding: 16 }}>
-              <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) auto", gap: 12, alignItems: "center" }}>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 12 }}>
-                  <div>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                      <div style={{ fontWeight: 700, color: B.dark, fontSize: ".94rem" }}>{ticket.name}</div>
-                      <span style={{ fontSize: ".72rem", color: B.gray }}>{ticket.id}</span>
-                    </div>
-                    <div style={{ fontSize: ".76rem", color: B.gray, marginTop: 3 }}>
-                      <i className="ti ti-map-pin" style={{ marginRight: 4, fontSize: 12 }} aria-hidden="true" />{ticket.city}
-                    </div>
+            <Card key={ticket.id} className="estimate-ticket-card">
+              <div className="estimate-ticket-row">
+                <div className="estimate-ticket-cell estimate-ticket-cell--customer">
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                    <div style={{ fontWeight: 700, color: B.dark, fontSize: ".94rem" }}>{ticket.name}</div>
+                    <span style={{ fontSize: ".72rem", color: B.gray }}>{ticket.id}</span>
                   </div>
-                  <div>
-                    <div style={{ fontSize: ".78rem", color: B.mid, fontWeight: 700 }}>{ticket.ptype}</div>
-                    <div style={{ fontSize: ".72rem", color: B.gray }}>{ticket.sqft > 0 ? `${ticket.sqft.toLocaleString()} sqft` : "Field measure required"}</div>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: ".72rem", color: B.gray, marginBottom: 3 }}>Estimate</div>
-                    <div style={{ fontSize: ".86rem", fontWeight: 700, color: B.dark }}>{fmtMoney(ticket.quote) !== "-" ? fmtMoney(ticket.quote) : `${fmtMoney(ticket.rLow)} - ${fmtMoney(ticket.rHigh)}`}</div>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: ".72rem", color: B.gray, marginBottom: 3 }}>Follow-up</div>
-                    <div style={{ fontSize: ".8rem", color: ticket.followUp ? B.bronze : B.gray }}>{ticket.followUp ? fmtDate(ticket.followUp) : "Not set"}</div>
+                  <div style={{ fontSize: ".76rem", color: B.gray, marginTop: 3 }}>
+                    <i className="ti ti-map-pin" style={{ marginRight: 4, fontSize: 12 }} aria-hidden="true" />{ticket.city}
                   </div>
                 </div>
-                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
-                  <Pill status={ticket.status} />
-                  {!["Estimate Accepted", "Ready to Schedule", "Scheduled", "Won", "Lost"].includes(ticket.status) && (
-                    <Btn sm v="green" onClick={() => onAcceptTicket(ticket)}>
-                      <i className="ti ti-check" style={{ marginRight: 5, fontSize: 12 }} aria-hidden="true" />Accept Estimate
+                <div className="estimate-ticket-cell">
+                  <div className="estimate-ticket-label">Project / Area</div>
+                  <div style={{ fontSize: ".78rem", color: B.mid, fontWeight: 700 }}>{ticket.ptype}</div>
+                  <div style={{ fontSize: ".72rem", color: B.gray, marginTop: 3 }}>{ticket.sqft > 0 ? `${ticket.sqft.toLocaleString()} sqft` : "Field measure required"}</div>
+                </div>
+                <div className="estimate-ticket-cell">
+                  <div className="estimate-ticket-label">Estimate</div>
+                  <div style={{ fontSize: ".86rem", fontWeight: 700, color: B.dark }}>{fmtMoney(ticket.quote) !== "-" ? fmtMoney(ticket.quote) : `${fmtMoney(ticket.rLow)} - ${fmtMoney(ticket.rHigh)}`}</div>
+                </div>
+                <div className="estimate-ticket-cell">
+                  <div className="estimate-ticket-label">Follow-up</div>
+                  <div style={{ fontSize: ".8rem", color: ticket.followUp ? B.bronze : B.gray }}>{ticket.followUp ? fmtDate(ticket.followUp) : "Not set"}</div>
+                </div>
+                <div className="estimate-ticket-cell">
+                  <div className="estimate-ticket-label">Decision</div>
+                  <DecisionPill ticket={ticket} />
+                </div>
+                <div className="estimate-ticket-cell estimate-ticket-cell--actions">
+                  <div className="estimate-ticket-label">Status / Actions</div>
+                  <div className="estimate-ticket-actions">
+                    <Pill status={ticket.status} />
+                    {canAcceptEstimate && (
+                      <Btn sm v="green" onClick={() => onAcceptTicket(ticket)}>
+                        <i className="ti ti-check" style={{ marginRight: 5, fontSize: 12 }} aria-hidden="true" />Accept Estimate
+                      </Btn>
+                    )}
+                    {["Estimate Accepted", "Ready to Schedule"].includes(ticket.status) && !isScheduled && (
+                      <Btn sm v="dark" onClick={() => onScheduleTicket(ticket)}>
+                        <i className="ti ti-calendar-event" style={{ marginRight: 5, fontSize: 12 }} aria-hidden="true" />Schedule Job
+                      </Btn>
+                    )}
+                    {isScheduled && <span style={{ fontSize: ".72rem", color: B.green, fontWeight: 700 }}>Job created</span>}
+                    <Btn sm v="outline" onClick={() => onSelectTicket(ticket)}>
+                      Open
                     </Btn>
-                  )}
-                  {["Estimate Accepted", "Ready to Schedule"].includes(ticket.status) && !isScheduled && (
-                    <Btn sm v="dark" onClick={() => onScheduleTicket(ticket)}>
-                      <i className="ti ti-calendar-event" style={{ marginRight: 5, fontSize: 12 }} aria-hidden="true" />Schedule Job
-                    </Btn>
-                  )}
-                  {isScheduled && <span style={{ fontSize: ".72rem", color: B.green, fontWeight: 700 }}>Job created</span>}
-                  <Btn sm v="outline" onClick={() => onSelectTicket(ticket)}>
-                    Open
-                  </Btn>
+                  </div>
                 </div>
               </div>
+              {ticket.notes && (
+                <div className="estimate-ticket-detail-row">
+                  <div className="estimate-ticket-detail-label">Customer notes</div>
+                  <div className="estimate-ticket-detail-text">{ticket.notes}</div>
+                </div>
+              )}
+              {latestNotification && (
+                <div className="estimate-ticket-detail-row" style={{ color: decision === "yes" ? B.green : decision === "no" ? B.bronze : B.gray }}>
+                  <div className="estimate-ticket-detail-label">Latest alert</div>
+                  <div className="estimate-ticket-detail-text">
+                  <i className={`ti ${decision === "yes" ? "ti-flame" : decision === "no" ? "ti-phone-call" : "ti-bell"}`} style={{ marginRight: 6 }} aria-hidden="true" />
+                  {latestNotification.message}
+                  </div>
+                </div>
+              )}
             </Card>
           );
         })}
@@ -839,6 +905,11 @@ function TicketDetailView({ ticket, onBack, onUpdateTicket, onOpenSchedule, sour
   const [t, setT] = useState({ ...ticket });
   const [note, setNote] = useState("");
   const [saved, setSaved] = useState(false);
+  const decision = getDecisionCategory(t);
+  const latestNotification = getLatestNotification(t);
+  const showSiteVisitAction = decision === "yes" && !["Site Visit Needed", "Scheduled", "Estimate Accepted", "Ready to Schedule", "Won"].includes(t.status);
+  const canScheduleJob = ["Estimate Accepted", "Ready to Schedule"].includes(t.status);
+  const canAcceptEstimate = decision === "pending" && !["Estimate Accepted", "Ready to Schedule", "Scheduled", "Won", "Lost", "Declined"].includes(t.status);
 
   const save = () => {
     onUpdateTicket(t);
@@ -884,14 +955,15 @@ function TicketDetailView({ ticket, onBack, onUpdateTicket, onOpenSchedule, sour
           <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
             <div>
               <h1 style={{ fontSize: "1.2rem", fontWeight: 700, color: B.dark, marginBottom: 4 }}>{t.name}</h1>
-              <div style={{ fontSize: ".82rem", color: B.gray }}>{t.ptype} Â· {t.city} Â· Submitted {fmtDateShort(t.at?.slice?.(0, 10) || todayIso())}</div>
+              <div style={{ fontSize: ".82rem", color: B.gray }}>{t.ptype} - {t.city} - Submitted {fmtDateShort(t.at?.slice?.(0, 10) || todayIso())}</div>
             </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-              <Pill status={t.status} />
-              {sourceJob && <span style={{ fontSize: ".76rem", color: B.green, fontWeight: 700 }}>Linked job: {sourceJob.work_order_number || sourceJob.id}</span>}
-            </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <Pill status={t.status} />
+            <DecisionPill ticket={t} />
+            {sourceJob && <span style={{ fontSize: ".76rem", color: B.green, fontWeight: 700 }}>Linked job: {sourceJob.work_order_number || sourceJob.id}</span>}
           </div>
-        </Card>
+        </div>
+      </Card>
 
         <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 16 }}>
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
@@ -977,6 +1049,37 @@ function TicketDetailView({ ticket, onBack, onUpdateTicket, onOpenSchedule, sour
             </Card>
 
             <Card>
+              <h3 style={{ fontSize: ".82rem", fontWeight: 700, color: B.dark, textTransform: "uppercase", letterSpacing: .5, marginBottom: 12 }}><i className="ti ti-route" style={{ marginRight: 6, color: B.bronze }} aria-hidden="true" />Estimate Decision</h3>
+              <div style={{ display: "grid", gap: 10 }}>
+                <div>
+                  <div style={{ fontSize: ".72rem", color: B.gray, marginBottom: 4 }}>Customer decision</div>
+                  <DecisionPill ticket={t} />
+                </div>
+                <div>
+                  <div style={{ fontSize: ".72rem", color: B.gray, marginBottom: 2 }}>Question asked</div>
+                  <div style={{ fontSize: ".8rem", color: B.dark }}>{t.decisionQuestion || "Does this estimate range work for your project?"}</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: ".72rem", color: B.gray, marginBottom: 2 }}>Decision recorded</div>
+                  <div style={{ fontSize: ".8rem", color: B.dark }}>{t.decisionAt ? new Date(t.decisionAt).toLocaleString() : "Awaiting customer response"}</div>
+                </div>
+                {decision === "no" && (t.decisionFeedbackReason || t.decisionFeedbackComment) && (
+                  <div style={{ padding: "10px 12px", borderRadius: 8, background: "#FFF8E1", border: `1px solid ${B.border}` }}>
+                    <div style={{ fontSize: ".72rem", color: B.gray, marginBottom: 4 }}>Customer feedback</div>
+                    {t.decisionFeedbackReason && <div style={{ fontSize: ".8rem", color: B.dark, fontWeight: 700, marginBottom: t.decisionFeedbackComment ? 6 : 0 }}>{t.decisionFeedbackReason}</div>}
+                    {t.decisionFeedbackComment && <div style={{ fontSize: ".78rem", color: B.mid, lineHeight: 1.5 }}>{t.decisionFeedbackComment}</div>}
+                  </div>
+                )}
+                {latestNotification && (
+                  <div style={{ padding: "10px 12px", borderRadius: 8, background: decision === "yes" ? "#E6F3EA" : decision === "no" ? "#FCF3CF" : B.sand, color: decision === "yes" ? "#25603C" : decision === "no" ? "#9C640C" : B.gray, fontSize: ".78rem", lineHeight: 1.5 }}>
+                    <strong style={{ display: "block", marginBottom: 4 }}>{latestNotification.title || "Lead notification"}</strong>
+                    {latestNotification.message}
+                  </div>
+                )}
+              </div>
+            </Card>
+
+            <Card>
               <h3 style={{ fontSize: ".82rem", fontWeight: 700, color: B.dark, textTransform: "uppercase", letterSpacing: .5, marginBottom: 12 }}><i className="ti ti-coin" style={{ marginRight: 6, color: B.bronze }} aria-hidden="true" />Pricing</h3>
               <div style={{ marginBottom: 12 }}>
                 <div style={{ fontSize: ".72rem", color: B.gray, marginBottom: 2 }}>Rough estimate range</div>
@@ -995,11 +1098,26 @@ function TicketDetailView({ ticket, onBack, onUpdateTicket, onOpenSchedule, sour
             <Card>
               <h3 style={{ fontSize: ".82rem", fontWeight: 700, color: B.dark, textTransform: "uppercase", letterSpacing: .5, marginBottom: 12 }}><i className="ti ti-bolt" style={{ marginRight: 6, color: B.bronze }} aria-hidden="true" />Quick Actions</h3>
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                <Btn full sm v="green" onClick={() => { changeStatus("Estimate Accepted"); }}>
-                  <i className="ti ti-check" style={{ marginRight: 5, fontSize: 13 }} aria-hidden="true" />Accept Estimate
-                </Btn>
-                <Btn full sm v="dark" onClick={() => onOpenSchedule(t)}>
-                  <i className="ti ti-calendar-event" style={{ marginRight: 5, fontSize: 13 }} aria-hidden="true" />Schedule Job
+                {canAcceptEstimate && (
+                  <Btn full sm v="green" onClick={() => { changeStatus("Estimate Accepted"); }}>
+                    <i className="ti ti-check" style={{ marginRight: 5, fontSize: 13 }} aria-hidden="true" />Accept Estimate
+                  </Btn>
+                )}
+                {showSiteVisitAction && (
+                  <Btn full sm v="green" onClick={() => { changeStatus("Site Visit Needed"); }}>
+                    <i className="ti ti-map-search" style={{ marginRight: 5, fontSize: 13 }} aria-hidden="true" />Move to Site Visit Needed
+                  </Btn>
+                )}
+                {canScheduleJob && (
+                  <Btn full sm v="dark" onClick={() => onOpenSchedule(t)}>
+                    <i className="ti ti-calendar-event" style={{ marginRight: 5, fontSize: 13 }} aria-hidden="true" />Schedule Job
+                  </Btn>
+                )}
+                {!canAcceptEstimate && !showSiteVisitAction && !canScheduleJob && (
+                  <div style={{ fontSize: ".76rem", color: B.gray, lineHeight: 1.5 }}>This lead is best handled through follow-up and status updates before scheduling work.</div>
+                )}
+                <Btn full sm v="outline" onClick={save}>
+                  <i className="ti ti-device-floppy" style={{ marginRight: 5, fontSize: 13 }} aria-hidden="true" />Save Lead Updates
                 </Btn>
                 {sourceJob && <div style={{ fontSize: ".75rem", color: B.green, fontWeight: 700 }}>This estimate already has a scheduled job.</div>}
               </div>
@@ -1139,7 +1257,7 @@ function CalendarSection({ jobs, crews, builders, onOpenJob, pendingResidentialD
                   {day.events.slice(0, 3).map(event => (
                     <button className="calendar-event" key={event.id} onClick={e => { e.stopPropagation(); if (!schedulingLocked) onOpenJob(event.jobId); }} style={{ background: eventColor(event), color: B.white, border: "none", borderRadius: 6, fontSize: ".66rem", padding: "4px 6px", textAlign: "left", cursor: schedulingLocked ? "default" : "pointer" }}>
                       <div style={{ fontWeight: 700 }}>{event.customer_name || `${event.builder_name} Lot ${event.lot_number}`}</div>
-                      <div style={{ opacity: .85 }}>{event.time} Â· Crew {findCrewById(crews, event.crew_id)?.number || "-"}</div>
+                      <div style={{ opacity: .85 }}>{event.time} - Crew {findCrewById(crews, event.crew_id)?.number || "-"}</div>
                     </button>
                   ))}
                   {day.events.length > 3 && <div style={{ fontSize: ".66rem", color: B.gray }}>+{day.events.length - 3} more</div>}
@@ -1320,8 +1438,8 @@ function JobsSection({ jobs, onSelectJob, onCreateBuilderJob }) {
             <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) auto", gap: 12, alignItems: "center" }}>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 10 }}>
                 <div>
-                  <div style={{ fontWeight: 700, fontSize: ".92rem", color: B.dark }}>{job.schedule_type === "residential" ? job.customer_name : `${job.builder_name} Â· Lot ${job.lot_number}`}</div>
-                  <div style={{ fontSize: ".74rem", color: B.gray }}>{job.schedule_type === "residential" ? job.job_address : `${job.community} Â· ${job.job_address}`}</div>
+                  <div style={{ fontWeight: 700, fontSize: ".92rem", color: B.dark }}>{job.schedule_type === "residential" ? job.customer_name : `${job.builder_name} - Lot ${job.lot_number}`}</div>
+                  <div style={{ fontSize: ".74rem", color: B.gray }}>{job.schedule_type === "residential" ? job.job_address : `${job.community} - ${job.job_address}`}</div>
                 </div>
                 <div>
                   <div style={{ fontSize: ".72rem", color: B.gray, marginBottom: 2 }}>Job type</div>
@@ -1331,10 +1449,10 @@ function JobsSection({ jobs, onSelectJob, onCreateBuilderJob }) {
                   <div style={{ fontSize: ".72rem", color: B.gray, marginBottom: 2 }}>Next scheduled work</div>
                   <div style={{ fontSize: ".82rem", color: B.dark }}>
                     {job.schedule_type === "residential"
-                      ? `${fmtDate(job.scheduled_date)} Â· ${job.scheduled_time || "-"}`
+                      ? `${fmtDate(job.scheduled_date)} - ${job.scheduled_time || "-"}`
                       : (() => {
                         const nextPhase = sortBuilderPhases(job.phases || []).find(phase => !["Completed", "Cancelled"].includes(phase.status));
-                        return nextPhase ? `${nextPhase.phase_label} Â· ${fmtDate(nextPhase.scheduled_date)}${nextPhase.scheduled_time ? ` Â· ${nextPhase.scheduled_time}` : ""}` : "All phases complete";
+                        return nextPhase ? `${nextPhase.phase_label} - ${fmtDate(nextPhase.scheduled_date)}${nextPhase.scheduled_time ? ` - ${nextPhase.scheduled_time}` : ""}` : "All phases complete";
                       })()}
                   </div>
                 </div>
@@ -1390,8 +1508,8 @@ function CrewsSection({ crews, jobs, onUpdateCrew }) {
               {upcoming.map(event => (
                 <div key={event.id} style={{ padding: "8px 10px", borderRadius: 6, background: B.sand, fontSize: ".74rem", color: B.mid }}>
                   <div style={{ fontWeight: 700 }}>{event.phase_label}</div>
-                  <div>{fmtDate(event.date)} Â· {event.time}</div>
-                  <div>{event.schedule_type === "builder_slab" ? `${event.builder_name} Â· Lot ${event.lot_number}` : event.customer_name}</div>
+                  <div>{fmtDate(event.date)} - {event.time}</div>
+                  <div>{event.schedule_type === "builder_slab" ? `${event.builder_name} - Lot ${event.lot_number}` : event.customer_name}</div>
                 </div>
               ))}
             </div>
@@ -1429,7 +1547,7 @@ function BuildersSection({ builders, jobs, onCreateBuilderJob, onCreateBuilder, 
             <div style={{ display: "flex", justifyContent: "space-between", gap: 12, marginBottom: 10 }}>
               <div>
                 <div style={{ fontWeight: 700, color: B.dark, fontSize: ".95rem" }}>{builder.name}</div>
-                <div style={{ fontSize: ".74rem", color: B.gray }}>{builder.contact} Â· {builder.phone}</div>
+                <div style={{ fontSize: ".74rem", color: B.gray }}>{builder.contact} - {builder.phone}</div>
               </div>
               <span style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "6px 10px", borderRadius: 20, background: `${builder.color}14`, color: builder.color, fontWeight: 700, fontSize: ".68rem", whiteSpace: "nowrap" }}>
                 <span style={{ width: 8, height: 8, borderRadius: 999, background: builder.color, display: "inline-block" }} />
@@ -1442,8 +1560,8 @@ function BuildersSection({ builders, jobs, onCreateBuilderJob, onCreateBuilder, 
               {builderJobs.length === 0 && <div style={{ fontSize: ".74rem", color: B.gray }}>No jobs yet.</div>}
               {builderJobs.map(job => (
                 <button key={job.id} onClick={() => onOpenJob(job.id)} style={{ textAlign: "left", background: B.sand, border: "1px solid var(--color-border-tertiary)", borderRadius: 6, padding: "8px 10px", cursor: "pointer", fontFamily: "inherit" }}>
-                  <div style={{ fontSize: ".76rem", fontWeight: 700, color: B.dark }}>{job.community} Â· Lot {job.lot_number}</div>
-                  <div style={{ fontSize: ".72rem", color: B.gray }}>{job.work_order_number || "No work order"} Â· {job.status}</div>
+                  <div style={{ fontSize: ".76rem", fontWeight: 700, color: B.dark }}>{job.community} - Lot {job.lot_number}</div>
+                  <div style={{ fontSize: ".72rem", color: B.gray }}>{job.work_order_number || "No work order"} - {job.status}</div>
                 </button>
               ))}
             </div>
@@ -1541,7 +1659,7 @@ function JobDetailView({ job, crews, onBack, onSaveJob, onOpenPhaseEdit }) {
         <Card style={{ marginBottom: 16 }}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
             <div>
-              <h1 style={{ fontSize: "1.2rem", fontWeight: 700, color: B.dark, marginBottom: 4 }}>{job.schedule_type === "residential" ? job.customer_name : `${job.builder_name} Â· ${job.community} Â· Lot ${job.lot_number}`}</h1>
+              <h1 style={{ fontSize: "1.2rem", fontWeight: 700, color: B.dark, marginBottom: 4 }}>{job.schedule_type === "residential" ? job.customer_name : `${job.builder_name} - ${job.community} - Lot ${job.lot_number}`}</h1>
               <div style={{ fontSize: ".82rem", color: B.gray }}>{job.job_address}</div>
             </div>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
@@ -1587,13 +1705,13 @@ function JobDetailView({ job, crews, onBack, onSaveJob, onOpenPhaseEdit }) {
                     </div>
                     <div>
                       <div style={{ fontSize: ".7rem", color: B.gray, marginBottom: 2 }}>Scheduled</div>
-                      <div style={{ fontSize: ".8rem", color: B.dark }}>{phase.scheduled_date ? `${fmtDate(phase.scheduled_date)} Â· ${phase.scheduled_time || "-"}` : "Not scheduled"}</div>
+                      <div style={{ fontSize: ".8rem", color: B.dark }}>{phase.scheduled_date ? `${fmtDate(phase.scheduled_date)} - ${phase.scheduled_time || "-"}` : "Not scheduled"}</div>
                     </div>
                     <div>
                       <div style={{ fontSize: ".7rem", color: B.gray, marginBottom: 2 }}>Crew / capacity</div>
                       <div style={{ fontSize: ".8rem", color: B.dark }}>
                         {phase.crew_id ? `Crew ${findCrewById(crews, phase.crew_id)?.number || "-"}` : "Dependency task"}
-                        {phase.crew_id && ` Â· ${fmtCap(phase.day_capacity_used)}`}
+                        {phase.crew_id && ` - ${fmtCap(phase.day_capacity_used)}`}
                       </div>
                     </div>
                   </div>
@@ -1743,15 +1861,15 @@ function ConflictModal({ state, crews, onClose, onChooseAnotherDate, onApplyReas
           <Card key={idx} style={{ padding: 14, background: "#FFF8F7", borderColor: "#F5C6C0" }}>
             <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 8 }}>
               <div style={{ fontWeight: 700, color: "#922B21" }}>Crew {conflict.crew?.number || "-"} capacity would hit {conflict.capacityTotal.toFixed(2)} / {conflict.capacityLimit.toFixed(2)} day</div>
-              <div style={{ fontSize: ".76rem", color: B.gray }}>{fmtDate(conflict.candidate.date)} Â· {conflict.candidate.time}</div>
+              <div style={{ fontSize: ".76rem", color: B.gray }}>{fmtDate(conflict.candidate.date)} - {conflict.candidate.time}</div>
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 8 }}>
               {conflict.conflictingEvents.map(event => (
                 <div key={event.id} style={{ padding: "8px 10px", borderRadius: 6, background: B.white, border: "1px solid #F2D7D5" }}>
                   <div style={{ fontSize: ".78rem", fontWeight: 700, color: B.dark }}>{event.phase_label}</div>
-                  <div style={{ fontSize: ".72rem", color: B.gray }}>{event.schedule_type === "builder_slab" ? `${event.builder_name} Â· ${event.community || ""} Lot ${event.lot_number || ""}` : `${event.customer_name}`}</div>
-                  <div style={{ fontSize: ".72rem", color: B.gray }}>{event.address || "-"} {event.work_order_number ? `Â· ${event.work_order_number}` : ""}</div>
-                  <div style={{ fontSize: ".72rem", color: B.gray }}>{event.time} Â· {fmtCap(event.capacity_used)} Â· {event.status}</div>
+                  <div style={{ fontSize: ".72rem", color: B.gray }}>{event.schedule_type === "builder_slab" ? `${event.builder_name} - ${event.community || ""} Lot ${event.lot_number || ""}` : `${event.customer_name}`}</div>
+                  <div style={{ fontSize: ".72rem", color: B.gray }}>{event.address || "-"} {event.work_order_number ? ` - ${event.work_order_number}` : ""}</div>
+                  <div style={{ fontSize: ".72rem", color: B.gray }}>{event.time} - {fmtCap(event.capacity_used)} - {event.status}</div>
                 </div>
               ))}
             </div>

@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+﻿import { useState, useMemo } from "react";
 import AdminWorkspace from "./src/adminDashboard";
 
 // ── SUPABASE SCHEMA (run in Supabase SQL Editor for production) ──────────────
@@ -8,8 +8,10 @@ import AdminWorkspace from "./src/adminDashboard";
 //   len numeric, wid numeric, sqft numeric, thick text, finish text,
 //   tear text, grade text, access_ok text, timeline text, notes text,
 //   rough_low numeric, rough_high numeric, final_quote numeric,
-//   status text default 'New Request', follow_up_date date,
+//   status text default 'New Request', estimate_decision text,
+//   decision_at timestamptz, follow_up_date date,
 //   file_count int default 0, file_names text[], admin_notes text,
+//   admin_notifications jsonb default '[]'::jsonb,
 //   updated_at timestamptz default now());
 // create table ticket_history (id uuid default gen_random_uuid() primary key,
 //   ticket_id uuid references tickets(id) on delete cascade,
@@ -31,6 +33,10 @@ const STAT = {
   "New Request":        {c:"#1A5276",bg:"#D6EAF8"},
   "Needs Review":       {c:"#784212",bg:"#FDEBD0"},
   "Rough Estimate Sent":{c:"#6C3483",bg:"#F4ECF7"},
+  "Interested":         {c:"#1A5632",bg:"#D5F5E3"},
+  "Site Visit Requested": {c:"#196F3D",bg:"#DCF3E4"},
+  "Follow Up Needed":   {c:"#9C640C",bg:"#FCF3CF"},
+  "Declined":           {c:"#7B7D7D",bg:"#F2F3F4"},
   "Site Visit Needed":  {c:"#922B21",bg:"#FADBD8"},
   "Scheduled":          {c:"#1A5632",bg:"#D5F5E3"},
   "Final Quote Sent":   {c:"#1B4F72",bg:"#D6EAF8"},
@@ -38,6 +44,34 @@ const STAT = {
   "Lost":               {c:"#4D5656",bg:"#EAEDED"},
 };
 const STAT_LIST = Object.keys(STAT);
+const ESTIMATE_DECISIONS = {
+  yes: {
+    label: "Yes / Interested",
+    answer: "Yes, I'd like to move forward",
+    status: "Site Visit Requested",
+    customerTitle: "Estimate request submitted for review.",
+    customerBody: "Someone from Southern Oak Concrete & Construction will reach out soon to discuss your project and next steps.",
+    notificationType: "warm_lead",
+    notificationTitle: "Warm lead",
+  },
+  no: {
+    label: "No / Follow Up Needed",
+    answer: "No, not at this time",
+    status: "Follow Up Needed",
+    customerTitle: "Thanks for checking with Southern Oak.",
+    customerBody: "We've saved your estimate details, and Southern Oak can still help if your plans change. The owner may follow up with a quick sales call.",
+    notificationType: "sales_follow_up",
+    notificationTitle: "Sales follow-up",
+  },
+};
+const NO_DECISION_FEEDBACK_OPTIONS = [
+  "Price was higher than expected",
+  "Project timing is not right",
+  "I am comparing other quotes",
+  "I need to change the project scope",
+  "I was only researching pricing",
+  "Other",
+];
 
 const SERVICES = [
   {id:"flatwork", icon:"ti-road", title:"Concrete Flatwork",
@@ -77,36 +111,38 @@ const GALLERY_ITEMS = [
 const ago = n => new Date(Date.now()-n*86400000).toISOString();
 const DEMO_TICKETS = [
   {id:"T-001",at:ago(0),name:"Mike Johnson",phone:"(770) 555-0142",email:"mikej@gmail.com",addr:"214 Maple Ridge Rd",city:"Griffin, GA",ptype:"Driveway",len:60,wid:14,sqft:840,thick:'4"',finish:"Broom",tear:"Yes",grade:"No",access:"Easy",timeline:"ASAP",notes:"Old asphalt needs to come out first. Want clean broom finish throughout.",rLow:7500,rHigh:10500,quote:null,status:"New Request",followUp:"",files:["driveway_front.jpg","driveway_side.jpg"],history:[{s:"New Request",d:ago(0),n:"Submitted via website"}],adminNotes:""},
-  {id:"T-002",at:ago(1),name:"Sarah & Tom Davis",phone:"(678) 555-0287",email:"davis.family@email.com",addr:"88 Birchwood Circle",city:"Thomaston, GA",ptype:"Stamped Patio",len:24,wid:16,sqft:384,thick:'4"',finish:"Stamped",tear:"No",grade:"Not Sure",access:"Easy",timeline:"~1 Month",notes:"Want flagstone stamp pattern. Backyard, some slope toward the fence line.",rLow:6800,rHigh:10200,quote:null,status:"Needs Review",followUp:"2026-06-05",files:["backyard1.jpg","backyard2.jpg","sketch.pdf"],history:[{s:"New Request",d:ago(1),n:"Submitted via website"},{s:"Needs Review",d:ago(1),n:"Need to check slope — grading may be needed"}],adminNotes:"Slope needs attention. If significant add $600-900. Customer is motivated — wants done before summer."},
+  {id:"T-002",at:ago(1),name:"Sarah & Tom Davis",phone:"(678) 555-0287",email:"davis.family@email.com",addr:"88 Birchwood Circle",city:"Thomaston, GA",ptype:"Stamped Patio",len:24,wid:16,sqft:384,thick:'4"',finish:"Stamped",tear:"No",grade:"Not Sure",access:"Easy",timeline:"~1 Month",notes:"Want flagstone stamp pattern. Backyard, some slope toward the fence line.",rLow:6800,rHigh:10200,quote:null,status:"Needs Review",followUp:"2026-06-05",files:["backyard1.jpg","backyard2.jpg","sketch.pdf"],history:[{s:"New Request",d:ago(1),n:"Submitted via website"},{s:"Needs Review",d:ago(1),n:"Need to check slope - grading may be needed"}],adminNotes:"Slope needs attention. If significant add $600-900. Customer is motivated - wants done before summer."},
   {id:"T-003",at:ago(3),name:"Robert Tanner",phone:"(404) 555-0311",email:"rtanner@outlook.com",addr:"Hwy 74 W, Lot 12",city:"Barnesville, GA",ptype:"Pole Barn Slab",len:60,wid:40,sqft:2400,thick:'6"',finish:"Broom",tear:"No",grade:"Yes",access:"Easy",timeline:"1-2 Weeks",notes:"40x60 slab for metal building. Dirt work started. Need 6 inch with wire mesh.",rLow:18000,rHigh:25000,quote:22800,status:"Final Quote Sent",followUp:"2026-06-06",files:["lot_survey.pdf"],history:[{s:"New Request",d:ago(3),n:"Submitted via website"},{s:"Site Visit Needed",d:ago(3),n:"Need to see grade and site conditions"},{s:"Scheduled",d:ago(2),n:"Site visit scheduled Tuesday 10am"},{s:"Final Quote Sent",d:ago(1),n:"Quote emailed: $22,800"}],adminNotes:"Good customer. Site relatively flat. Following up Friday."},
   {id:"T-004",at:ago(5),name:"Linda Weston",phone:"(770) 555-0419",email:"lindaw@gmail.com",addr:"421 Pecan Grove Dr",city:"Forsyth, GA",ptype:"Sidewalk",len:45,wid:4,sqft:180,thick:'4"',finish:"Broom",tear:"Yes",grade:"No",access:"Easy",timeline:"Flexible",notes:"Old cracked sidewalk from driveway to front porch needs full replacement.",rLow:1500,rHigh:2400,quote:1900,status:"Won",followUp:"",files:[],history:[{s:"New Request",d:ago(5),n:"Submitted via website"},{s:"Rough Estimate Sent",d:ago(5),n:"Sent range via text"},{s:"Final Quote Sent",d:ago(4),n:"Quote: $1,900 incl. tear-out"},{s:"Won",d:ago(3),n:"Customer accepted. Scheduled next week."}],adminNotes:"Small job complete. Deposit collected."},
-  {id:"T-005",at:ago(7),name:"James Holley",phone:"(404) 555-0572",email:"jholley@email.net",addr:"15 Commerce Park Blvd",city:"McDonough, GA",ptype:"Commercial Slab",len:80,wid:50,sqft:4000,thick:'6"',finish:"Smooth",tear:"No",grade:"Yes",access:"Easy",timeline:"ASAP",notes:"Warehouse expansion slab. 4000 sqft for heavy equipment use. Need reinforced.",rLow:30000,rHigh:42000,quote:null,status:"Needs Review",followUp:"2026-06-04",files:["site_plan.pdf","warehouse_layout.pdf"],history:[{s:"New Request",d:ago(7),n:"Submitted via website"},{s:"Needs Review",d:ago(6),n:"Commercial — review engineering requirements"}],adminNotes:"Need geotechnical report. Rebar req for heavy equipment adds cost. Call Monday."},
-  {id:"T-006",at:ago(2),name:"Derek Fountain",phone:"(678) 555-0833",email:"dfountain@icloud.com",addr:"619 Lakeview Trl",city:"Locust Grove, GA",ptype:"Columns",len:0,wid:0,sqft:0,thick:"N/A",finish:"N/A",tear:"No",grade:"No",access:"Easy",timeline:"1-2 Weeks",notes:"4 brick columns, 6 feet tall each, for a new front entrance gate with caps.",rLow:4000,rHigh:10000,quote:null,status:"Site Visit Needed",followUp:"2026-06-07",files:["gate_reference.jpg"],history:[{s:"New Request",d:ago(2),n:"Submitted via website"},{s:"Needs Review",d:ago(2),n:"Column work — need footing depth info"},{s:"Site Visit Needed",d:ago(1),n:"Visiting to confirm spec and footing"}],adminNotes:"4 columns ~6ft. Wide range — confirm footing depth and cap design on site."},
-  {id:"T-007",at:ago(10),name:"Carla Simmons",phone:"(478) 555-0688",email:"csimmons@yahoo.com",addr:"302 Old Mill Rd",city:"Macon, GA",ptype:"Decorative Pool Deck",len:20,wid:20,sqft:400,thick:'4"',finish:"Decorative",tear:"No",grade:"No",access:"Easy",timeline:"~1 Month",notes:"Pool deck needs decorative overlay. Prefer a light cool-deck style finish.",rLow:4800,rHigh:7200,quote:5600,status:"Scheduled",followUp:"2026-06-10",files:["pool_area.jpg","pool_deck.jpg"],history:[{s:"New Request",d:ago(10),n:"Submitted via website"},{s:"Rough Estimate Sent",d:ago(10),n:"Range sent via email"},{s:"Site Visit Needed",d:ago(8),n:"Check existing deck condition"},{s:"Final Quote Sent",d:ago(6),n:"Quote: $5,600 for decorative overlay"},{s:"Scheduled",d:ago(4),n:"Scheduled for June 10"}],adminNotes:"Overlay job June 10. Check for cracks day before — add $300-500 if crack repair needed."},
-  {id:"T-008",at:ago(14),name:"Harold & Brenda Puckett",phone:"(770) 555-0724",email:"hpuckett@gmail.com",addr:"County Road 34",city:"Zebulon, GA",ptype:"Block Foundation",len:28,wid:36,sqft:1008,thick:"N/A",finish:"N/A",tear:"No",grade:"Yes",access:"Not Sure",timeline:"Flexible",notes:"Shop building block foundation plus interior slab. Rural property, some grade work.",rLow:8500,rHigh:14000,quote:null,status:"Lost",followUp:"",files:[],history:[{s:"New Request",d:ago(14),n:"Submitted via website"},{s:"Rough Estimate Sent",d:ago(13),n:"Sent rough range"},{s:"Lost",d:ago(8),n:"Customer went with lower bid"}],adminNotes:"Lost to price. Rural access uncertainty may have inflated estimate."},
+  {id:"T-005",at:ago(7),name:"James Holley",phone:"(404) 555-0572",email:"jholley@email.net",addr:"15 Commerce Park Blvd",city:"McDonough, GA",ptype:"Commercial Slab",len:80,wid:50,sqft:4000,thick:'6"',finish:"Smooth",tear:"No",grade:"Yes",access:"Easy",timeline:"ASAP",notes:"Warehouse expansion slab. 4000 sqft for heavy equipment use. Need reinforced.",rLow:30000,rHigh:42000,quote:null,status:"Needs Review",followUp:"2026-06-04",files:["site_plan.pdf","warehouse_layout.pdf"],history:[{s:"New Request",d:ago(7),n:"Submitted via website"},{s:"Needs Review",d:ago(6),n:"Commercial - review engineering requirements"}],adminNotes:"Need geotechnical report. Rebar req for heavy equipment adds cost. Call Monday."},
+  {id:"T-006",at:ago(2),name:"Derek Fountain",phone:"(678) 555-0833",email:"dfountain@icloud.com",addr:"619 Lakeview Trl",city:"Locust Grove, GA",ptype:"Columns",len:0,wid:0,sqft:0,thick:"N/A",finish:"N/A",tear:"No",grade:"No",access:"Easy",timeline:"1-2 Weeks",notes:"4 brick columns, 6 feet tall each, for a new front entrance gate with caps.",rLow:4000,rHigh:10000,quote:null,status:"Site Visit Needed",followUp:"2026-06-07",files:["gate_reference.jpg"],history:[{s:"New Request",d:ago(2),n:"Submitted via website"},{s:"Needs Review",d:ago(2),n:"Column work - need footing depth info"},{s:"Site Visit Needed",d:ago(1),n:"Visiting to confirm spec and footing"}],adminNotes:"4 columns ~6ft. Wide range - confirm footing depth and cap design on site."},
+  {id:"T-007",at:ago(10),name:"Carla Simmons",phone:"(478) 555-0688",email:"csimmons@yahoo.com",addr:"302 Old Mill Rd",city:"Macon, GA",ptype:"Decorative Pool Deck",len:20,wid:20,sqft:400,thick:'4"',finish:"Decorative",tear:"No",grade:"No",access:"Easy",timeline:"~1 Month",notes:"Pool deck needs decorative overlay. Prefer a light cool-deck style finish.",rLow:4800,rHigh:7200,quote:5600,status:"Scheduled",followUp:"2026-06-10",files:["pool_area.jpg","pool_deck.jpg"],history:[{s:"New Request",d:ago(10),n:"Submitted via website"},{s:"Rough Estimate Sent",d:ago(10),n:"Range sent via email"},{s:"Site Visit Needed",d:ago(8),n:"Check existing deck condition"},{s:"Final Quote Sent",d:ago(6),n:"Quote: $5,600 for decorative overlay"},{s:"Scheduled",d:ago(4),n:"Scheduled for June 10"}],adminNotes:"Overlay job June 10. Check for cracks day before - add $300-500 if crack repair needed."},
+  {id:"T-008",at:ago(14),name:"Harold & Brenda Puckett",phone:"(770) 555-0724",email:"hpuckett@gmail.com",addr:"County Road 34",city:"Zebulon, GA",ptype:"Block Foundation",len:28,wid:36,sqft:1008,thick:"N/A",finish:"N/A",tear:"No",grade:"Yes",access:"Not Sure",timeline:"Flexible",notes:"Shop building block foundation plus interior slab. Rural property, some grade work.",rLow:8500,rHigh:14000,quote:null,status:"Lost",followUp:"",files:[],history:[{s:"New Request",d:ago(14),n:"Submitted via website"},{s:"Rough Estimate Sent",d:ago(13),n:"Sent rough range"},{s:"Lost",d:ago(8),n:"Customer went with lower bid"}],adminNotes:"Lost to price. Rural access uncertainty may have inflated estimate.",decisionFeedbackReason:"I am comparing other quotes",decisionFeedbackComment:"Still deciding between two contractors and may revisit this later."},
 ];
 
 // ── UTILITIES ──────────────────────────────────────────────────
-const fmtDate = iso => iso ? new Date(iso).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"}) : "—";
-const fmtTime = iso => iso ? new Date(iso).toLocaleString("en-US",{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"}) : "—";
-const fmtMoney = n => n != null ? "$"+Number(n).toLocaleString() : "—";
-const fmtRange = (lo,hi) => lo && hi ? `$${Number(lo).toLocaleString()} – $${Number(hi).toLocaleString()}` : "—";
+const fmtDate = iso => iso ? new Date(iso).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"}) : "-";
+const fmtTime = iso => iso ? new Date(iso).toLocaleString("en-US",{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"}) : "-";
+const fmtMoney = n => n != null ? "$"+Number(n).toLocaleString() : "-";
+const fmtRange = (lo,hi) => lo && hi ? `$${Number(lo).toLocaleString()} - $${Number(hi).toLocaleString()}` : "-";
+const getDecisionMeta = decision => ESTIMATE_DECISIONS[decision] || null;
+const getInitialEstimateForm = () => ({type:null,len:"",wid:"",cols:"",thick:"ns",tear:"no",grade:"no",access:"yes",finish:"ns",timeline:"flex",notes:"",name:"",phone:"",email:"",addr:"",city:"",fileCount:0,fileNames:[]});
 
 const DP = {b1:7,b2:10,mj:1500,st1:8,st2:15,de1:4,de2:8,th1:1,th2:2,tr1:2.5,tr2:4.5,gr1:500,gr2:1500,ac1:300,ac2:800,pb1:7,pb2:11,bl1:25,bl2:45,co1:800,co2:2500,re1:400,re2:1800};
 const TYPES = [{id:"driveway",label:"Driveway",sqft:true},{id:"patio",label:"Patio",sqft:true},{id:"sidewalk",label:"Sidewalk",sqft:true},{id:"slab",label:"General Slab",sqft:true},{id:"stamped",label:"Stamped Concrete",sqft:true},{id:"decorative",label:"Decorative Concrete",sqft:true},{id:"repair",label:"Concrete Repair",sqft:false},{id:"pole_barn",label:"Pole Barn Slab",sqft:true},{id:"block",label:"Block Foundation",sqft:true},{id:"columns",label:"Columns",sqft:false},{id:"other",label:"Other / Not Sure",sqft:true}];
 
 function calcEst(form, P) {
   const t=form.type; let sqft=0,lo=0,hi=0,rows=[],notes=[];
-  if(t==="columns"){const n=parseInt(form.cols)||1;lo=n*P.co1;hi=n*P.co2;rows.push({l:`${n} column${n>1?"s":""} × $${P.co1}–$${P.co2} each`,lo,hi});notes.push("Column pricing depends on size, height, design, and footing requirements.");return fin(sqft,lo,hi,rows,notes,P);}
-  if(t==="repair"){sqft=(form.len&&form.wid)?parseFloat(form.len)*parseFloat(form.wid):0;lo=P.re1;hi=P.re2;rows.push({l:"Concrete repair — rough all-in range",lo,hi});notes.push("Repair pricing is highly variable. Scope confirmed on site visit.");return fin(sqft,lo,hi,rows,notes,P);}
+  if(t==="columns"){const n=parseInt(form.cols)||1;lo=n*P.co1;hi=n*P.co2;rows.push({l:`${n} column${n>1?"s":""} x $${P.co1}-$${P.co2} each`,lo,hi});notes.push("Column pricing depends on size, height, design, and footing requirements.");return fin(sqft,lo,hi,rows,notes,P);}
+  if(t==="repair"){sqft=(form.len&&form.wid)?parseFloat(form.len)*parseFloat(form.wid):0;lo=P.re1;hi=P.re2;rows.push({l:"Concrete repair - rough all-in range",lo,hi});notes.push("Repair pricing is highly variable. Scope confirmed on site visit.");return fin(sqft,lo,hi,rows,notes,P);}
   sqft=parseFloat(form.len)*parseFloat(form.wid);
-  if(t==="block"){const pr=2*(parseFloat(form.len)+parseFloat(form.wid));lo=pr*P.bl1;hi=pr*P.bl2;rows.push({l:`~${Math.round(pr)} lin ft × $${P.bl1}–$${P.bl2}/ft`,lo,hi});notes.push("Final pricing depends on wall height, block type, and footing design.");if(form.grade!=="no"){rows.push({l:(form.grade==="ns"?"Possible ":"")+"Grading/prep",lo:P.gr1,hi:P.gr2});lo+=P.gr1;hi+=P.gr2;}if(form.access!=="yes"){rows.push({l:(form.access==="ns"?"Possible ":"")+"Difficult access",lo:P.ac1,hi:P.ac2});lo+=P.ac1;hi+=P.ac2;}return fin(sqft,lo,hi,rows,notes,P);}
-  if(t==="pole_barn"){lo=sqft*P.pb1;hi=sqft*P.pb2;rows.push({l:`${sqft.toLocaleString()} sqft × $${P.pb1}–$${P.pb2}/sqft`,lo,hi});}
-  else{lo=sqft*P.b1;hi=sqft*P.b2;rows.push({l:`${sqft.toLocaleString()} sqft × $${P.b1}–$${P.b2}/sqft (base)`,lo,hi});const isSt=t==="stamped"||form.finish==="stamped";const isDe=t==="decorative"||form.finish==="decorative";if(isSt){const sl=sqft*P.st1,sh=sqft*P.st2;rows.push({l:`Stamped finish (+$${P.st1}–$${P.st2}/sqft)`,lo:sl,hi:sh});lo+=sl;hi+=sh;}else if(isDe){const dl=sqft*P.de1,dh=sqft*P.de2;rows.push({l:`Decorative/stain (+$${P.de1}–$${P.de2}/sqft)`,lo:dl,hi:dh});lo+=dl;hi+=dh;}}
-  if(form.thick==="6"&&sqft>0){const tl=sqft*P.th1,th=sqft*P.th2;rows.push({l:`6"+ thick slab (+$${P.th1}–$${P.th2}/sqft)`,lo:tl,hi:th});lo+=tl;hi+=th;}
-  if(form.tear!=="no"&&sqft>0){const px=form.tear==="ns"?"Possible ":"",rl=sqft*P.tr1,rh=sqft*P.tr2;rows.push({l:`${px}Tear-out/removal (+$${P.tr1}–$${P.tr2}/sqft)`,lo:rl,hi:rh});lo+=rl;hi+=rh;if(form.tear==="ns")notes.push("Tear-out included as possible — confirm on site visit.");}
-  if(form.grade!=="no"){const px=form.grade==="ns"?"Possible ":"";rows.push({l:`${px}Grading/prep`,lo:P.gr1,hi:P.gr2});lo+=P.gr1;hi+=P.gr2;if(form.grade==="ns")notes.push("Grading included as possible — confirm on site visit.");}
-  if(form.access!=="yes"){const px=form.access==="ns"?"Possible ":"";rows.push({l:`${px}Difficult access`,lo:P.ac1,hi:P.ac2});lo+=P.ac1;hi+=P.ac2;if(form.access==="ns")notes.push("Access upcharge possible — confirm on site visit.");}
+  if(t==="block"){const pr=2*(parseFloat(form.len)+parseFloat(form.wid));lo=pr*P.bl1;hi=pr*P.bl2;rows.push({l:`~${Math.round(pr)} lin ft x $${P.bl1}-$${P.bl2}/ft`,lo,hi});notes.push("Final pricing depends on wall height, block type, and footing design.");if(form.grade!=="no"){rows.push({l:(form.grade==="ns"?"Possible ":"")+"Grading/prep",lo:P.gr1,hi:P.gr2});lo+=P.gr1;hi+=P.gr2;}if(form.access!=="yes"){rows.push({l:(form.access==="ns"?"Possible ":"")+"Difficult access",lo:P.ac1,hi:P.ac2});lo+=P.ac1;hi+=P.ac2;}return fin(sqft,lo,hi,rows,notes,P);}
+  if(t==="pole_barn"){lo=sqft*P.pb1;hi=sqft*P.pb2;rows.push({l:`${sqft.toLocaleString()} sqft x $${P.pb1}-$${P.pb2}/sqft`,lo,hi});}
+  else{lo=sqft*P.b1;hi=sqft*P.b2;rows.push({l:`${sqft.toLocaleString()} sqft x $${P.b1}-$${P.b2}/sqft (base)`,lo,hi});const isSt=t==="stamped"||form.finish==="stamped";const isDe=t==="decorative"||form.finish==="decorative";if(isSt){const sl=sqft*P.st1,sh=sqft*P.st2;rows.push({l:`Stamped finish (+$${P.st1}-$${P.st2}/sqft)`,lo:sl,hi:sh});lo+=sl;hi+=sh;}else if(isDe){const dl=sqft*P.de1,dh=sqft*P.de2;rows.push({l:`Decorative/stain (+$${P.de1}-$${P.de2}/sqft)`,lo:dl,hi:dh});lo+=dl;hi+=dh;}}
+  if(form.thick==="6"&&sqft>0){const tl=sqft*P.th1,th=sqft*P.th2;rows.push({l:`6\"+ thick slab (+$${P.th1}-$${P.th2}/sqft)`,lo:tl,hi:th});lo+=tl;hi+=th;}
+  if(form.tear!=="no"&&sqft>0){const px=form.tear==="ns"?"Possible ":"",rl=sqft*P.tr1,rh=sqft*P.tr2;rows.push({l:`${px}Tear-out/removal (+$${P.tr1}-$${P.tr2}/sqft)`,lo:rl,hi:rh});lo+=rl;hi+=rh;if(form.tear==="ns")notes.push("Tear-out included as possible - confirm on site visit.");}
+  if(form.grade!=="no"){const px=form.grade==="ns"?"Possible ":"";rows.push({l:`${px}Grading/prep`,lo:P.gr1,hi:P.gr2});lo+=P.gr1;hi+=P.gr2;if(form.grade==="ns")notes.push("Grading included as possible - confirm on site visit.");}
+  if(form.access!=="yes"){const px=form.access==="ns"?"Possible ":"";rows.push({l:`${px}Difficult access`,lo:P.ac1,hi:P.ac2});lo+=P.ac1;hi+=P.ac2;if(form.access==="ns")notes.push("Access upcharge possible - confirm on site visit.");}
   return fin(sqft,lo,hi,rows,notes,P);
 }
 function fin(sqft,lo,hi,rows,notes,P){if(lo<P.mj||hi<P.mj)notes.push(`Minimum job price of $${P.mj.toLocaleString()} applied.`);lo=Math.max(lo,P.mj);hi=Math.max(hi,P.mj);lo=Math.round(lo/50)*50;hi=Math.round(hi/50)*50;if(lo===hi)hi=lo+500;return{sqft,lo,hi,rows,notes};}
@@ -217,7 +253,7 @@ function Footer({setPage, setAdminMode}) {
             <div style={{color:B.white,fontWeight:700,marginBottom:12,fontSize:".82rem",textTransform:"uppercase",letterSpacing:1}}>Contact</div>
             <div style={{fontSize:".78rem",color:"rgba(255,255,255,.6)",lineHeight:1.9}}>
               <div><i className="ti ti-map-pin" style={{marginRight:6,color:B.tan}} aria-hidden="true"/>Thomaston, GA 30286</div>
-              <div><i className="ti ti-clock" style={{marginRight:6,color:B.tan}} aria-hidden="true"/>Mon–Sat 7am–6pm</div>
+              <div><i className="ti ti-clock" style={{marginRight:6,color:B.tan}} aria-hidden="true"/>Mon-Sat 7am-6pm</div>
               <div onClick={()=>setPage("estimate")} style={{cursor:"pointer",color:B.tan,fontWeight:600,marginTop:8}}>
                 <i className="ti ti-arrow-right" style={{marginRight:5}} aria-hidden="true"/>Request Free Estimate
               </div>
@@ -225,7 +261,7 @@ function Footer({setPage, setAdminMode}) {
           </div>
         </div>
         <div style={{borderTop:"1px solid rgba(255,255,255,.1)",paddingTop:16,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
-          <span style={{fontSize:".72rem",color:"rgba(255,255,255,.35)"}}>© 2026 Southern Oak Concrete & Construction. All rights reserved.</span>
+          <span style={{fontSize:".72rem",color:"rgba(255,255,255,.35)"}}>(c) 2026 Southern Oak Concrete & Construction. All rights reserved.</span>
           <div style={{display:"flex",alignItems:"center",gap:14,flexWrap:"wrap"}}>
             <button onClick={()=>{setAdminMode(true);window.scrollTo({top:0,behavior:"smooth"});}} style={{background:"none",border:"none",padding:0,fontSize:".72rem",color:"rgba(255,255,255,.35)",cursor:"pointer",fontFamily:"inherit"}}>
               Admin sign in
@@ -256,7 +292,7 @@ function HomePage({setPage}) {
             Concrete & Masonry<br/><span style={{color:B.tan}}>Built to Last.</span>
           </h1>
           <p style={{fontSize:"1rem",color:"rgba(255,255,255,.65)",lineHeight:1.7,marginBottom:28,maxWidth:560,margin:"0 auto 28px"}}>
-            Driveways, patios, slabs, stamped concrete, block foundations, and pole barn construction — residential and commercial. Free estimates. No pressure.
+            Driveways, patios, slabs, stamped concrete, block foundations, and pole barn construction - residential and commercial. Free estimates. No pressure.
           </p>
           <div style={{display:"flex",gap:12,justifyContent:"center",flexWrap:"wrap"}}>
             <SBtn onClick={()=>setPage("estimate")} style={{fontSize:"1rem",padding:"13px 28px"}}>
@@ -338,7 +374,7 @@ function HomePage({setPage}) {
               <span key={a} style={{padding:"6px 14px",borderRadius:20,background:B.white,border:"1px solid "+B.border,fontSize:".78rem",fontWeight:600,color:B.mid}}>{a}, GA</span>
             ))}
           </div>
-          <p style={{marginTop:20,fontSize:".8rem",color:B.gray}}>Not on this list? Call us — we serve many surrounding areas as well.</p>
+          <p style={{marginTop:20,fontSize:".8rem",color:B.gray}}>Not on this list? Call us - we serve many surrounding areas as well.</p>
         </div>
       </div>
 
@@ -449,7 +485,7 @@ function AboutPage({setPage}) {
         <div style={{background:B.white,borderRadius:10,padding:"32px 28px",border:"1px solid "+B.border,marginBottom:20}}>
           <h2 style={{fontSize:"1.3rem",fontWeight:700,color:B.dark,marginBottom:16}}>Our Story</h2>
           <p style={{color:B.mid,lineHeight:1.8,marginBottom:14,fontSize:".9rem"}}>Southern Oak Concrete and Construction is a locally owned concrete and masonry contractor based in Thomaston, Georgia. We serve residential homeowners, farmers, and commercial customers across Middle Georgia with concrete flatwork, stamped and decorative concrete, masonry, pole barn construction, and block foundations.</p>
-          <p style={{color:B.mid,lineHeight:1.8,fontSize:".9rem"}}>We built this company on straightforward work: show up on time, do the job right, stand behind what we build. Every project — whether it's a backyard patio or a 5,000 square foot commercial slab — gets the same attention to detail. We don't cut corners on prep work, reinforcement, or finish.</p>
+          <p style={{color:B.mid,lineHeight:1.8,fontSize:".9rem"}}>We built this company on straightforward work: show up on time, do the job right, stand behind what we build. Every project - whether it's a backyard patio or a 5,000 square foot commercial slab - gets the same attention to detail. We don't cut corners on prep work, reinforcement, or finish.</p>
         </div>
         <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))",gap:16,marginBottom:24}}>
           {[{icon:"ti-heart",t:"Locally Owned",d:"Thomaston, GA based. We're your neighbors."},{icon:"ti-certificate",t:"Licensed & Insured",d:"Fully licensed and insured for your protection."},{icon:"ti-users",t:"Experienced Crews",d:"Skilled craftsmen with years in the field."},].map(({icon,t,d})=>(
@@ -479,7 +515,7 @@ function ContactPage({setPage}) {
       </div>
       <div style={{maxWidth:700,margin:"0 auto",padding:"40px 16px 60px"}}>
         <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))",gap:14,marginBottom:24}}>
-          {[{icon:"ti-phone",l:"Phone",v:"(404) 861-4594",href:"tel:4048614594"},{icon:"ti-map-pin",l:"Location",v:"Thomaston, GA 30286"},{icon:"ti-clock",l:"Hours",v:"Mon–Sat 7am–6pm"}].map(({icon,l,v,href})=>(
+          {[{icon:"ti-phone",l:"Phone",v:"(404) 861-4594",href:"tel:4048614594"},{icon:"ti-map-pin",l:"Location",v:"Thomaston, GA 30286"},{icon:"ti-clock",l:"Hours",v:"Mon-Sat 7am-6pm"}].map(({icon,l,v,href})=>(
             <div key={l} style={{background:B.white,borderRadius:8,padding:"18px 16px",border:"1px solid "+B.border,textAlign:"center"}}>
               <i className={`ti ${icon}`} style={{fontSize:24,color:B.bronze,marginBottom:8,display:"block"}} aria-hidden="true"/>
               <div style={{fontSize:".72rem",color:B.gray,marginBottom:3,textTransform:"uppercase",letterSpacing:.5}}>{l}</div>
@@ -515,69 +551,322 @@ function ContactPage({setPage}) {
 }
 
 // ── ESTIMATE FORM ──────────────────────────────────────────────
-function EstimatePage({onSubmitTicket}) {
+function EstimatePage({onSubmitTicket, onUpdateTicket, onReturnHome}) {
   const [step,setStep]=useState(0);
-  const [form,setForm]=useState({type:null,len:"",wid:"",cols:"",thick:"ns",tear:"no",grade:"no",access:"yes",finish:"ns",timeline:"flex",notes:"",name:"",phone:"",email:"",addr:"",city:"",fileCount:0,fileNames:[]});
+  const [form,setForm]=useState(getInitialEstimateForm);
   const [est,setEst]=useState(null);
-  const [done,setDone]=useState(false);
+  const [decision,setDecision]=useState(null);
+  const [decisionTicketId,setDecisionTicketId]=useState("");
+  const [decisionTimestamp,setDecisionTimestamp]=useState("");
+  const [showEmailPreview,setShowEmailPreview]=useState(false);
+  const [noFeedbackReason,setNoFeedbackReason]=useState("");
+  const [noFeedbackComment,setNoFeedbackComment]=useState("");
   const F=(k,v)=>setForm(f=>({...f,[k]:v}));
   const go=n=>{setStep(n);};
   const isSpecial=t=>["repair","block","columns"].includes(t);
-  const progPct = step===0?0:(step/4)*100;
+  const progPct = step===0?0:(Math.min(step,4)/4)*100;
+
+  const resetEstimateFlow = () => {
+    setStep(0);
+    setForm(getInitialEstimateForm());
+    setEst(null);
+    setDecision(null);
+    setDecisionTicketId("");
+    setDecisionTimestamp("");
+    setShowEmailPreview(false);
+    setNoFeedbackReason("");
+    setNoFeedbackComment("");
+  };
+
+  const returnHome = () => {
+    resetEstimateFlow();
+    onReturnHome();
+  };
 
   const handleSubmit=()=>{
     const e = calcEst(form,DP);
     setEst(e);
+    setStep(4);
+  };
+
+  const buildDecisionTicket = (decisionKey, extras = {}) => {
+    if (!est) return null;
+    const meta = getDecisionMeta(decisionKey);
+    if (!meta) return null;
+    const timestamp = extras.timestamp || new Date().toISOString();
     const tType = TYPES.find(t=>t.id===form.type);
-    const ticket = {
-      id:"T-"+(100+Math.floor(Math.random()*900)),
-      at:new Date().toISOString(),
+    const notificationMessage = decisionKey === "yes"
+      ? "Customer approved the estimate range. Review and follow up for site visit planning."
+      : "Customer said the estimate range does not work right now. Owner follow-up call recommended.";
+    const feedbackNote = extras.feedbackReason
+      ? ` Feedback reason: ${extras.feedbackReason}.${extras.feedbackComment ? ` Additional feedback: ${extras.feedbackComment}` : ""}`
+      : "";
+    return {
+      id: extras.id || "T-"+(100+Math.floor(Math.random()*900)),
+      at: extras.at || timestamp,
       name:form.name, phone:form.phone, email:form.email,
       addr:form.addr, city:form.city,
       ptype:tType?.label||form.type,
       len:parseFloat(form.len)||0, wid:parseFloat(form.wid)||0,
-      sqft:e.sqft, thick:form.thick==="ns"?"Not Sure":form.thick+'"',
+      sqft:est.sqft, thick:form.thick==="ns"?"Not Sure":form.thick+'"',
       finish:{broom:"Broom",smooth:"Smooth",stamped:"Stamped",decorative:"Decorative",ns:"Not Sure"}[form.finish]||form.finish,
       tear:{yes:"Yes",no:"No",ns:"Not Sure"}[form.tear],
       grade:{yes:"Yes",no:"No",ns:"Not Sure"}[form.grade],
       access:{yes:"Easy",no:"Difficult",ns:"Not Sure"}[form.access],
       timeline:{asap:"ASAP","2wks":"1-2 Weeks","1mo":"~1 Month",flex:"Flexible"}[form.timeline]||form.timeline,
-      notes:form.notes, rLow:e.lo, rHigh:e.hi, quote:null,
-      status:"New Request", followUp:"",
-      files:form.fileNames, adminNotes:"",
-      history:[{s:"New Request",d:new Date().toISOString(),n:"Submitted via website estimate form"}],
+      notes:form.notes, rLow:est.lo, rHigh:est.hi, quote:null,
+      status:meta.status,
+      estimateDecision:decisionKey,
+      estimateDecisionLabel:meta.label,
+      decisionQuestion:"Does this estimate range work for your project?",
+      decisionAt:timestamp,
+      decisionFeedbackReason: extras.feedbackReason || "",
+      decisionFeedbackComment: extras.feedbackComment || "",
+      followUp:decisionKey==="no"?new Date(Date.now()+3*86400000).toISOString().slice(0,10):"",
+      files:form.fileNames,
+      adminNotes:"",
+      notifications:[{
+        id: extras.notificationId || `notif-${Date.now()}`,
+        type:meta.notificationType,
+        title:meta.notificationTitle,
+        message:notificationMessage,
+        createdAt:timestamp,
+      }],
+      history:[
+        {s:"New Request",d:timestamp,n:"Submitted via website estimate form"},
+        {s:"Rough Estimate Sent",d:timestamp,n:`Online rough estimate range shown: ${fmtRange(est.lo, est.hi)}.`},
+        {s:meta.status,d:timestamp,n:`Customer selected "${meta.answer}". ${notificationMessage}${feedbackNote}`},
+      ],
     };
-    onSubmitTicket(ticket);
-    setDone(true);
   };
 
-  if(done&&est) return (
+  const submitDecision = decisionKey => {
+    const ticket = buildDecisionTicket(decisionKey);
+    if (!ticket) return;
+    onSubmitTicket(ticket);
+    setDecision(decisionKey);
+    setDecisionTicketId(ticket.id);
+    setDecisionTimestamp(ticket.decisionAt);
+    if (decisionKey === "yes") {
+      setShowEmailPreview(false);
+    }
+  };
+
+  const submitNoFeedback = () => {
+    if (!decisionTicketId || !noFeedbackReason) {
+      alert("Please select a feedback reason.");
+      return;
+    }
+    const timestamp = decisionTimestamp || new Date().toISOString();
+    const ticket = buildDecisionTicket("no", {
+      id: decisionTicketId,
+      timestamp,
+      at: timestamp,
+      notificationId: `notif-${decisionTicketId}`,
+      feedbackReason: noFeedbackReason,
+      feedbackComment: noFeedbackComment.trim(),
+    });
+    if (!ticket) return;
+    onUpdateTicket(ticket);
+    setShowEmailPreview(true);
+  };
+
+  const emailPreview = decision === "yes"
+    ? {
+      subject: "Southern Oak Estimate Request Received",
+      body: [
+        "Thank you for submitting your estimate request with Southern Oak Concrete & Construction.",
+        "",
+        "We received your project details and your estimate is now in review. Someone from our team will reach out soon to discuss your project, confirm details, and talk through next steps.",
+        "",
+        "Please remember that online estimates are rough starting price ranges only. Final pricing depends on site visit confirmation, actual measurements, grading, prep, tear-out, access, and other site conditions.",
+        "",
+        "Thank you,",
+        "Southern Oak Concrete & Construction",
+      ].join("\n"),
+    }
+    : {
+      subject: "Southern Oak Estimate Feedback Received",
+      body: [
+        "Thank you for using the Southern Oak Concrete & Construction online estimator.",
+        "",
+        "We received your feedback and saved your project details. If your plans, timing, or budget change, we would be happy to help you take another look.",
+        "",
+        "Please remember that online estimates are rough starting price ranges only. Final pricing depends on site visit confirmation, actual measurements, grading, prep, tear-out, access, and other site conditions.",
+        "",
+        "Thank you,",
+        "Southern Oak Concrete & Construction",
+      ].join("\n"),
+    };
+
+  if(decision==="yes"&&est) return (
     <div style={{background:B.sand,minHeight:"100vh",padding:"40px 16px"}}>
       <div style={{maxWidth:600,margin:"0 auto"}}>
         <div style={{background:"#FFF8E1",borderLeft:"4px solid "+B.bronze,borderRadius:8,padding:"12px 14px",marginBottom:16,fontSize:".8rem",color:"#5C4700",lineHeight:1.5}}>
-          <strong style={{display:"block",marginBottom:2}}>Rough Estimate Only — Not a Final Quote</strong>
+          <strong style={{display:"block",marginBottom:2}}>Rough Estimate Only - Not a Final Quote</strong>
           Final pricing depends on site visit confirmation, actual measurements, grading, prep, tear-out, access, and other site conditions.
         </div>
         <div style={{background:B.dark,borderRadius:10,overflow:"hidden",marginBottom:16}}>
           <div style={{background:B.green,padding:"14px 18px"}}>
-            <div style={{fontWeight:700,color:B.white,fontSize:"1rem"}}>Rough Estimate — {TYPES.find(t=>t.id===form.type)?.label}</div>
-            <div style={{fontSize:".74rem",color:"rgba(255,255,255,.7)",marginTop:2}}>For: {form.name}{form.city?" — "+form.city:""}</div>
+            <div style={{fontWeight:700,color:B.white,fontSize:"1rem"}}>Rough Estimate - {TYPES.find(t=>t.id===form.type)?.label}</div>
+            <div style={{fontSize:".74rem",color:"rgba(255,255,255,.7)",marginTop:2}}>For: {form.name}{form.city?" - "+form.city:""}</div>
           </div>
           <div style={{padding:"16px 18px"}}>
             {est.sqft>0&&<div style={{display:"flex",justifyContent:"space-between",padding:"6px 0",borderBottom:"1px solid rgba(255,255,255,.08)",fontSize:".8rem"}}><span style={{color:"rgba(255,255,255,.6)"}}>Estimated area</span><span style={{color:B.white,fontWeight:700}}>{est.sqft.toLocaleString()} sqft</span></div>}
-            {est.rows.map((r,i)=><div key={i} style={{display:"flex",justifyContent:"space-between",padding:"6px 0",borderBottom:"1px solid rgba(255,255,255,.08)",fontSize:".8rem"}}><span style={{color:"rgba(255,255,255,.6)",flex:1}}>{r.l}</span><span style={{color:B.white,fontWeight:700,whiteSpace:"nowrap"}}>${r.lo.toLocaleString()}–${r.hi.toLocaleString()}</span></div>)}
-            {est.notes.length>0&&<div style={{background:"rgba(196,168,130,.1)",borderRadius:6,padding:"9px 11px",marginTop:10,fontSize:".76rem",color:B.tan,lineHeight:1.5}}>{est.notes.map((n,i)=><div key={i}>⚠️ {n}</div>)}</div>}
+            {est.rows.map((r,i)=><div key={i} style={{display:"flex",justifyContent:"space-between",padding:"6px 0",borderBottom:"1px solid rgba(255,255,255,.08)",fontSize:".8rem"}}><span style={{color:"rgba(255,255,255,.6)",flex:1}}>{r.l}</span><span style={{color:B.white,fontWeight:700,whiteSpace:"nowrap"}}>${r.lo.toLocaleString()} - ${r.hi.toLocaleString()}</span></div>)}
+            {est.notes.length>0&&<div style={{background:"rgba(196,168,130,.1)",borderRadius:6,padding:"9px 11px",marginTop:10,fontSize:".76rem",color:B.tan,lineHeight:1.5}}>{est.notes.map((n,i)=><div key={i}>Note: {n}</div>)}</div>}
             <div style={{textAlign:"center",background:"rgba(255,255,255,.05)",border:"2px solid "+B.tan,borderRadius:8,padding:18,marginTop:12}}>
               <div style={{fontSize:".7rem",color:B.lgray,textTransform:"uppercase",letterSpacing:.5}}>Rough Starting Price Range</div>
-              <div style={{fontSize:"1.7rem",fontWeight:700,color:B.tan,margin:"4px 0"}}>${est.lo.toLocaleString()} – ${est.hi.toLocaleString()}</div>
-              <div style={{fontSize:".68rem",color:B.lgray,fontStyle:"italic"}}>Not a final quote — site visit required to confirm</div>
+              <div style={{fontSize:"1.7rem",fontWeight:700,color:B.tan,margin:"4px 0"}}>${est.lo.toLocaleString()} - ${est.hi.toLocaleString()}</div>
+              <div style={{fontSize:".68rem",color:B.lgray,fontStyle:"italic"}}>Not a final quote - site visit required to confirm</div>
             </div>
           </div>
         </div>
         <div style={{background:"#D5F5E3",border:"1px solid #A9DFBF",borderRadius:8,padding:"20px",textAlign:"center"}}>
           <i className="ti ti-circle-check" style={{fontSize:32,color:"#1E8449",marginBottom:8,display:"block"}} aria-hidden="true"/>
-          <div style={{fontWeight:700,color:"#1E8449",fontSize:"1rem",marginBottom:4}}>Request submitted!</div>
-          <p style={{fontSize:".82rem",color:"#1A5632",lineHeight:1.5}}>Thank you, {form.name.split(" ")[0]}! Southern Oak Concrete will be in touch to schedule a free site visit and confirm pricing.</p>
+          <div style={{fontWeight:700,color:"#1E8449",fontSize:"1rem",marginBottom:4}}>Estimate request submitted for review.</div>
+          <p style={{fontSize:".82rem",color:"#1A5632",lineHeight:1.5,marginBottom:8}}>Thank you! Your estimate request has been submitted for review. Someone from Southern Oak Concrete & Construction will reach out soon to discuss your project and next steps.</p>
+          <div style={{fontSize:".76rem",color:"#1A5632",fontWeight:600,marginBottom:14}}>Saved decision: Yes, I'd like to move forward</div>
+          <SBtn onClick={()=>setShowEmailPreview(true)} v="green" style={{minWidth:160}}>Continue</SBtn>
+        </div>
+      </div>
+      {showEmailPreview&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.45)",padding:"20px 16px",overflowY:"auto",zIndex:3000}}>
+          <div style={{maxWidth:640,margin:"40px auto",background:B.white,borderRadius:12,border:"1px solid "+B.border,overflow:"hidden",boxShadow:"0 18px 50px rgba(0,0,0,.18)"}}>
+            <div style={{padding:"16px 18px",borderBottom:"1px solid "+B.border,background:B.sand}}>
+              <div style={{fontSize:"1.05rem",fontWeight:700,color:B.dark}}>Demo Email Preview</div>
+            </div>
+            <div style={{padding:"18px"}}>
+              <div style={{background:"#FFF8E1",borderLeft:"4px solid "+B.bronze,borderRadius:8,padding:"12px 14px",marginBottom:16,fontSize:".8rem",color:"#5C4700",lineHeight:1.5}}>
+                This email preview is for demonstration purposes only. On the live website, this modal will not appear. The customer will receive this email automatically.
+              </div>
+              <div style={{marginBottom:12}}>
+                <div style={{fontSize:".72rem",fontWeight:700,color:B.gray,textTransform:"uppercase",letterSpacing:.5,marginBottom:4}}>Subject</div>
+                <div style={{fontSize:".9rem",fontWeight:700,color:B.dark}}>{emailPreview.subject}</div>
+              </div>
+              <div>
+                <div style={{fontSize:".72rem",fontWeight:700,color:B.gray,textTransform:"uppercase",letterSpacing:.5,marginBottom:4}}>Body</div>
+                <div style={{background:B.sand,borderRadius:8,padding:"14px",fontSize:".82rem",color:B.mid,lineHeight:1.65,whiteSpace:"pre-wrap"}}>{emailPreview.body}</div>
+              </div>
+              <div style={{marginTop:16,display:"flex",justifyContent:"flex-end"}}>
+                <SBtn onClick={returnHome} v="green">Return Home</SBtn>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
+  if(decision==="no"&&est) return (
+    <div style={{background:B.sand,minHeight:"100vh",padding:"40px 16px"}}>
+      <div style={{maxWidth:600,margin:"0 auto"}}>
+        <div style={{background:"#FFF8E1",borderLeft:"4px solid "+B.bronze,borderRadius:8,padding:"12px 14px",marginBottom:16,fontSize:".8rem",color:"#5C4700",lineHeight:1.5}}>
+          <strong style={{display:"block",marginBottom:2}}>Rough Estimate Only - Not a Final Quote</strong>
+          Final pricing depends on site visit confirmation, actual measurements, grading, prep, tear-out, access, and other site conditions.
+        </div>
+        <div style={{background:B.dark,borderRadius:10,overflow:"hidden",marginBottom:16}}>
+          <div style={{background:B.green,padding:"14px 18px"}}>
+            <div style={{fontWeight:700,color:B.white,fontSize:"1rem"}}>Rough Estimate - {TYPES.find(t=>t.id===form.type)?.label}</div>
+            <div style={{fontSize:".74rem",color:"rgba(255,255,255,.7)",marginTop:2}}>For: {form.name}{form.city?" - "+form.city:""}</div>
+          </div>
+          <div style={{padding:"16px 18px"}}>
+            {est.sqft>0&&<div style={{display:"flex",justifyContent:"space-between",padding:"6px 0",borderBottom:"1px solid rgba(255,255,255,.08)",fontSize:".8rem"}}><span style={{color:"rgba(255,255,255,.6)"}}>Estimated area</span><span style={{color:B.white,fontWeight:700}}>{est.sqft.toLocaleString()} sqft</span></div>}
+            {est.rows.map((r,i)=><div key={i} style={{display:"flex",justifyContent:"space-between",padding:"6px 0",borderBottom:"1px solid rgba(255,255,255,.08)",fontSize:".8rem"}}><span style={{color:"rgba(255,255,255,.6)",flex:1}}>{r.l}</span><span style={{color:B.white,fontWeight:700,whiteSpace:"nowrap"}}>${r.lo.toLocaleString()} - ${r.hi.toLocaleString()}</span></div>)}
+            {est.notes.length>0&&<div style={{background:"rgba(196,168,130,.1)",borderRadius:6,padding:"9px 11px",marginTop:10,fontSize:".76rem",color:B.tan,lineHeight:1.5}}>{est.notes.map((n,i)=><div key={i}>Note: {n}</div>)}</div>}
+            <div style={{textAlign:"center",background:"rgba(255,255,255,.05)",border:"2px solid "+B.tan,borderRadius:8,padding:18,marginTop:12}}>
+              <div style={{fontSize:".7rem",color:B.lgray,textTransform:"uppercase",letterSpacing:.5}}>Rough Starting Price Range</div>
+              <div style={{fontSize:"1.7rem",fontWeight:700,color:B.tan,margin:"4px 0"}}>${est.lo.toLocaleString()} - ${est.hi.toLocaleString()}</div>
+              <div style={{fontSize:".68rem",color:B.lgray,fontStyle:"italic"}}>Not a final quote - site visit required to confirm</div>
+            </div>
+          </div>
+        </div>
+        <div style={{background:B.white,borderRadius:10,padding:"20px",border:"1px solid "+B.border}}>
+          <div style={{fontSize:".72rem",fontWeight:700,color:B.bronze,textTransform:"uppercase",letterSpacing:.6,marginBottom:6}}>Follow-up Feedback</div>
+          <h2 style={{fontSize:"1.08rem",fontWeight:700,color:B.dark,marginBottom:6}}>Can you tell us why this estimate range does not work for your project right now?</h2>
+          <div style={{display:"grid",gap:8,marginBottom:14}}>
+            {NO_DECISION_FEEDBACK_OPTIONS.map(option=>(
+              <label key={option} style={{display:"flex",alignItems:"flex-start",gap:10,padding:"10px 12px",border:"1px solid "+(noFeedbackReason===option?B.bronze:B.border),borderRadius:8,background:noFeedbackReason===option?"#FFF8E1":B.white,cursor:"pointer"}}>
+                <input type="radio" name="no-feedback-reason" value={option} checked={noFeedbackReason===option} onChange={e=>setNoFeedbackReason(e.target.value)} style={{marginTop:2}}/>
+                <span style={{fontSize:".82rem",color:B.dark,lineHeight:1.4}}>{option}</span>
+              </label>
+            ))}
+          </div>
+          <div style={{marginBottom:16}}>
+            <label style={{display:"block",fontSize:".78rem",fontWeight:700,color:B.dark,marginBottom:4}}>Additional feedback</label>
+            <textarea style={{...INP,resize:"vertical",minHeight:90}} placeholder="Additional feedback" value={noFeedbackComment} onChange={e=>setNoFeedbackComment(e.target.value)}/>
+          </div>
+          <div style={{display:"flex",justifyContent:"flex-end"}}>
+            <SBtn onClick={submitNoFeedback} v="green">Submit Feedback</SBtn>
+          </div>
+        </div>
+      </div>
+      {showEmailPreview&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.45)",padding:"20px 16px",overflowY:"auto",zIndex:3000}}>
+          <div style={{maxWidth:640,margin:"40px auto",background:B.white,borderRadius:12,border:"1px solid "+B.border,overflow:"hidden",boxShadow:"0 18px 50px rgba(0,0,0,.18)"}}>
+            <div style={{padding:"16px 18px",borderBottom:"1px solid "+B.border,background:B.sand}}>
+              <div style={{fontSize:"1.05rem",fontWeight:700,color:B.dark}}>Demo Email Preview</div>
+            </div>
+            <div style={{padding:"18px"}}>
+              <div style={{background:"#FFF8E1",borderLeft:"4px solid "+B.bronze,borderRadius:8,padding:"12px 14px",marginBottom:16,fontSize:".8rem",color:"#5C4700",lineHeight:1.5}}>
+                This email preview is for demonstration purposes only. On the live website, this modal will not appear. The customer will receive this email automatically.
+              </div>
+              <div style={{marginBottom:12}}>
+                <div style={{fontSize:".72rem",fontWeight:700,color:B.gray,textTransform:"uppercase",letterSpacing:.5,marginBottom:4}}>Subject</div>
+                <div style={{fontSize:".9rem",fontWeight:700,color:B.dark}}>{emailPreview.subject}</div>
+              </div>
+              <div>
+                <div style={{fontSize:".72rem",fontWeight:700,color:B.gray,textTransform:"uppercase",letterSpacing:.5,marginBottom:4}}>Body</div>
+                <div style={{background:B.sand,borderRadius:8,padding:"14px",fontSize:".82rem",color:B.mid,lineHeight:1.65,whiteSpace:"pre-wrap"}}>{emailPreview.body}</div>
+              </div>
+              <div style={{marginTop:16,display:"flex",justifyContent:"flex-end"}}>
+                <SBtn onClick={returnHome} v="green">Return Home</SBtn>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
+  if(step===4&&est) return (
+    <div style={{background:B.sand,minHeight:"100vh",padding:"40px 16px"}}>
+      <div style={{maxWidth:600,margin:"0 auto"}}>
+        <div style={{background:"#FFF8E1",borderLeft:"4px solid "+B.bronze,borderRadius:8,padding:"12px 14px",marginBottom:16,fontSize:".8rem",color:"#5C4700",lineHeight:1.5}}>
+          <strong style={{display:"block",marginBottom:2}}>Rough Estimate Only - Not a Final Quote</strong>
+          Final pricing depends on site visit confirmation, actual measurements, grading, prep, tear-out, access, and other site conditions.
+        </div>
+        <div style={{background:B.dark,borderRadius:10,overflow:"hidden",marginBottom:16}}>
+          <div style={{background:B.green,padding:"14px 18px"}}>
+            <div style={{fontWeight:700,color:B.white,fontSize:"1rem"}}>Rough Estimate - {TYPES.find(t=>t.id===form.type)?.label}</div>
+            <div style={{fontSize:".74rem",color:"rgba(255,255,255,.7)",marginTop:2}}>For: {form.name}{form.city?" - "+form.city:""}</div>
+          </div>
+          <div style={{padding:"16px 18px"}}>
+            {est.sqft>0&&<div style={{display:"flex",justifyContent:"space-between",padding:"6px 0",borderBottom:"1px solid rgba(255,255,255,.08)",fontSize:".8rem"}}><span style={{color:"rgba(255,255,255,.6)"}}>Estimated area</span><span style={{color:B.white,fontWeight:700}}>{est.sqft.toLocaleString()} sqft</span></div>}
+            {est.rows.map((r,i)=><div key={i} style={{display:"flex",justifyContent:"space-between",padding:"6px 0",borderBottom:"1px solid rgba(255,255,255,.08)",fontSize:".8rem"}}><span style={{color:"rgba(255,255,255,.6)",flex:1}}>{r.l}</span><span style={{color:B.white,fontWeight:700,whiteSpace:"nowrap"}}>${r.lo.toLocaleString()} - ${r.hi.toLocaleString()}</span></div>)}
+            {est.notes.length>0&&<div style={{background:"rgba(196,168,130,.1)",borderRadius:6,padding:"9px 11px",marginTop:10,fontSize:".76rem",color:B.tan,lineHeight:1.5}}>{est.notes.map((n,i)=><div key={i}>Note: {n}</div>)}</div>}
+            <div style={{textAlign:"center",background:"rgba(255,255,255,.05)",border:"2px solid "+B.tan,borderRadius:8,padding:18,marginTop:12}}>
+              <div style={{fontSize:".7rem",color:B.lgray,textTransform:"uppercase",letterSpacing:.5}}>Rough Starting Price Range</div>
+              <div style={{fontSize:"1.7rem",fontWeight:700,color:B.tan,margin:"4px 0"}}>${est.lo.toLocaleString()} - ${est.hi.toLocaleString()}</div>
+              <div style={{fontSize:".68rem",color:B.lgray,fontStyle:"italic"}}>Not a final quote - site visit required to confirm</div>
+            </div>
+          </div>
+        </div>
+        <div style={{background:B.white,borderRadius:10,padding:"20px",border:"1px solid "+B.border}}>
+          <div style={{fontSize:".72rem",fontWeight:700,color:B.bronze,textTransform:"uppercase",letterSpacing:.6,marginBottom:6}}>Decision Step</div>
+          <h2 style={{fontSize:"1.08rem",fontWeight:700,color:B.dark,marginBottom:6}}>Does this estimate range work for your project?</h2>
+          <p style={{fontSize:".82rem",color:B.gray,lineHeight:1.5,marginBottom:14}}>Choose the option that fits best. We'll save your estimate details either way so Southern Oak can follow up appropriately.</p>
+          <div style={{display:"grid",gap:10}}>
+            <button onClick={()=>submitDecision("yes")} style={{padding:"14px 16px",borderRadius:8,border:"none",background:B.green,color:B.white,fontWeight:700,fontSize:".88rem",cursor:"pointer",fontFamily:"inherit",textAlign:"left"}}>
+              1. Yes, I'd like to move forward
+            </button>
+            <button onClick={()=>submitDecision("no")} style={{padding:"14px 16px",borderRadius:8,border:"1.5px solid "+B.border,background:B.white,color:B.mid,fontWeight:700,fontSize:".88rem",cursor:"pointer",fontFamily:"inherit",textAlign:"left"}}>
+              2. No, not at this time
+            </button>
+          </div>
+          <div style={{display:"flex",gap:8,marginTop:14}}>
+            <SBtn onClick={()=>go(3)} v="outlineDark" style={{whiteSpace:"nowrap"}}>Back</SBtn>
+          </div>
         </div>
       </div>
     </div>
@@ -592,7 +881,7 @@ function EstimatePage({onSubmitTicket}) {
       {step>0&&<div style={{background:B.green,height:4}}><div style={{height:4,background:B.tan,width:progPct+"%",transition:"width .3s"}}/></div>}
       <div style={{maxWidth:600,margin:"0 auto",padding:"28px 16px 60px"}}>
         <div style={{background:"#FFF8E1",borderLeft:"4px solid "+B.bronze,borderRadius:8,padding:"10px 14px",marginBottom:20,fontSize:".78rem",color:"#5C4700",lineHeight:1.5}}>
-          <strong>Rough estimate only — not a final quote.</strong> Final pricing requires a site visit and actual measurements.
+          <strong>Rough estimate only - not a final quote.</strong> Final pricing requires a site visit and actual measurements.
         </div>
 
         {step===0&&<div>
@@ -608,7 +897,7 @@ function EstimatePage({onSubmitTicket}) {
 
         {step===1&&<div>
           <h2 style={{fontSize:"1rem",fontWeight:700,color:B.dark,marginBottom:3}}>Project details</h2>
-          <p style={{fontSize:".82rem",color:B.gray,marginBottom:14}}>Fill in what you know — rough estimates are fine.</p>
+          <p style={{fontSize:".82rem",color:B.gray,marginBottom:14}}>Fill in what you know - rough estimates are fine.</p>
           {!isSpecial(form.type)&&form.type!=="repair"&&<div style={{marginBottom:12}}>
             <label style={{display:"block",fontSize:".8rem",fontWeight:700,color:B.dark,marginBottom:4}}>Approximate dimensions</label>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
@@ -620,12 +909,12 @@ function EstimatePage({onSubmitTicket}) {
           {!isSpecial(form.type)&&<Pills2 label="Concrete thickness" value={form.thick} onChange={v=>F("thick",v)} opts={[{v:"4",l:'4" Standard'},{v:"5",l:'5"'},{v:"6",l:'6" Heavy'},{v:"ns",l:"Not Sure"}]}/>}
           <Pills2 label="Existing concrete removal?" value={form.tear} onChange={v=>F("tear",v)} opts={[{v:"yes",l:"Yes"},{v:"no",l:"No"},{v:"ns",l:"Not Sure"}]}/>
           <Pills2 label="Grading or dirt work needed?" value={form.grade} onChange={v=>F("grade",v)} opts={[{v:"yes",l:"Yes"},{v:"no",l:"No"},{v:"ns",l:"Not Sure"}]}/>
-          <Pills2 label="Easy truck / equipment access?" value={form.access} onChange={v=>F("access",v)} opts={[{v:"yes",l:"Yes — Easy"},{v:"no",l:"No — Difficult"},{v:"ns",l:"Not Sure"}]}/>
+          <Pills2 label="Easy truck / equipment access?" value={form.access} onChange={v=>F("access",v)} opts={[{v:"yes",l:"Yes - Easy"},{v:"no",l:"No - Difficult"},{v:"ns",l:"Not Sure"}]}/>
           {!isSpecial(form.type)&&<Pills2 label="Desired finish" value={form.finish} onChange={v=>F("finish",v)} opts={[{v:"broom",l:"Broom"},{v:"smooth",l:"Smooth"},{v:"stamped",l:"Stamped"},{v:"decorative",l:"Decorative"},{v:"ns",l:"Not Sure"}]}/>}
           <Pills2 label="Timeline" value={form.timeline} onChange={v=>F("timeline",v)} opts={[{v:"asap",l:"ASAP"},{v:"2wks",l:"1-2 Wks"},{v:"1mo",l:"~1 Month"},{v:"flex",l:"Flexible"}]}/>
           <div style={{marginBottom:12}}><label style={{display:"block",fontSize:".8rem",fontWeight:700,color:B.dark,marginBottom:4}}>Additional notes <span style={{fontWeight:400,color:B.gray}}>(optional)</span></label><textarea style={{...INP,resize:"vertical",minHeight:70}} placeholder="Describe your project, site conditions, special requests..." value={form.notes} onChange={e=>F("notes",e.target.value)}/></div>
           <div style={{display:"flex",gap:8,marginTop:4}}>
-            <SBtn onClick={()=>go(0)} v="outlineDark" style={{whiteSpace:"nowrap"}}>← Back</SBtn>
+            <SBtn onClick={()=>go(0)} v="outlineDark" style={{whiteSpace:"nowrap"}}>Back</SBtn>
             <SBtn onClick={()=>{
               if(!isSpecial(form.type)&&form.type!=="repair"){if(!form.len||!form.wid||parseFloat(form.len)<=0||parseFloat(form.wid)<=0){alert("Please enter the project length and width.");return;}}
               if(form.type==="columns"&&(!form.cols||parseInt(form.cols)<=0)){alert("Please enter the number of columns.");return;}
@@ -636,16 +925,16 @@ function EstimatePage({onSubmitTicket}) {
 
         {step===2&&<div>
           <h2 style={{fontSize:"1rem",fontWeight:700,color:B.dark,marginBottom:3}}>Photos, plans & drawings</h2>
-          <p style={{fontSize:".82rem",color:B.gray,marginBottom:14}}>Optional — but photos help us give a better estimate.</p>
+          <p style={{fontSize:".82rem",color:B.gray,marginBottom:14}}>Optional - but photos help us give a better estimate.</p>
           <div style={{background:"#EDE7D5",borderRadius:8,padding:"9px 12px",fontSize:".76rem",color:B.gray,marginBottom:12}}><strong style={{color:B.dark}}>Helpful uploads:</strong> Site photos, existing concrete, access paths, sketches, or any plans you have.</div>
           <label style={{display:"block",border:"2px dashed "+B.border,borderRadius:8,padding:"22px 14px",textAlign:"center",cursor:"pointer",background:B.white,marginBottom:12}}>
             <i className="ti ti-photo-plus" style={{fontSize:28,color:B.lgray,display:"block",marginBottom:8}} aria-hidden="true"/>
-            <p style={{fontSize:".78rem",color:B.gray,lineHeight:1.4}}>Click to upload photos, plans, or sketches<br/><span style={{fontSize:".7rem"}}>JPG, PNG, HEIC, PDF · up to 10 files</span></p>
+            <p style={{fontSize:".78rem",color:B.gray,lineHeight:1.4}}>Click to upload photos, plans, or sketches<br/><span style={{fontSize:".7rem"}}>JPG, PNG, HEIC, PDF - up to 10 files</span></p>
             <input type="file" multiple accept="image/*,.pdf,.heic" style={{display:"none"}} onChange={e=>{const fs=Array.from(e.target.files).slice(0,10);F("fileCount",fs.length);F("fileNames",fs.map(f=>f.name));}}/>
           </label>
           {form.fileCount>0&&<p style={{fontSize:".76rem",color:B.gray,marginBottom:12}}><i className="ti ti-check" style={{color:"#1E8449",marginRight:4}} aria-hidden="true"/>{form.fileCount} file{form.fileCount!==1?"s":""} selected</p>}
           <div style={{display:"flex",gap:8}}>
-            <SBtn onClick={()=>go(1)} v="outlineDark" style={{whiteSpace:"nowrap"}}>← Back</SBtn>
+            <SBtn onClick={()=>go(1)} v="outlineDark" style={{whiteSpace:"nowrap"}}>Back</SBtn>
             <SBtn onClick={()=>go(3)} full style={{fontSize:".9rem",padding:"11px 0"}}>Next: Your Info <i className="ti ti-arrow-right" style={{marginLeft:6,fontSize:13,verticalAlign:-2}} aria-hidden="true"/></SBtn>
           </div>
         </div>}
@@ -661,7 +950,7 @@ function EstimatePage({onSubmitTicket}) {
           <div style={{marginBottom:12}}><label style={{display:"block",fontSize:".8rem",fontWeight:700,color:B.dark,marginBottom:4}}>Project address <span style={{fontWeight:400,color:B.gray}}>(optional)</span></label><input style={INP} placeholder="123 Main St" value={form.addr} onChange={e=>F("addr",e.target.value)}/></div>
           <div style={{marginBottom:16}}><label style={{display:"block",fontSize:".8rem",fontWeight:700,color:B.dark,marginBottom:4}}>City / area</label><input style={INP} placeholder="City, State" value={form.city} onChange={e=>F("city",e.target.value)}/></div>
           <div style={{display:"flex",gap:8}}>
-            <SBtn onClick={()=>go(2)} v="outlineDark" style={{whiteSpace:"nowrap"}}>← Back</SBtn>
+            <SBtn onClick={()=>go(2)} v="outlineDark" style={{whiteSpace:"nowrap"}}>Back</SBtn>
             <SBtn onClick={()=>{
               if(!form.name){alert("Please enter your name.");return;}
               if(!form.phone&&!form.email){alert("Please provide a phone number or email.");return;}
@@ -890,7 +1179,7 @@ function TicketDetail({ticket, onBack, onUpdate}) {
         <div style={{background:B.white,borderRadius:8,padding:"20px",border:"0.5px solid var(--color-border-tertiary)",marginBottom:16,display:"flex",justifyContent:"space-between",flexWrap:"wrap",gap:12}}>
           <div>
             <h1 style={{fontSize:"1.2rem",fontWeight:700,color:B.dark,marginBottom:4}}>{t.name}</h1>
-            <div style={{fontSize:".82rem",color:B.gray}}>{t.ptype} · {t.city} · Submitted {fmtDate(t.at)}</div>
+            <div style={{fontSize:".82rem",color:B.gray}}>{t.ptype} - {t.city} - Submitted {fmtDate(t.at)}</div>
           </div>
           <div style={{display:"flex",alignItems:"center",gap:10}}>
             <Pill status={t.status}/>
@@ -906,7 +1195,7 @@ function TicketDetail({ticket, onBack, onUpdate}) {
                 <i className="ti ti-user" style={{marginRight:6,color:B.bronze}} aria-hidden="true"/>Customer Info
               </h3>
               <div style={{display:"grid",gap:8}}>
-                {[["Name",t.name],["Phone",t.phone||"—"],["Email",t.email||"—"],["Address",t.addr||"—"],["City",t.city||"—"]].map(([l,v])=>(
+                {[["Name",t.name],["Phone",t.phone||"-"],["Email",t.email||"-"],["Address",t.addr||"-"],["City",t.city||"-"]].map(([l,v])=>(
                   <div key={l} style={{display:"flex",gap:10}}>
                     <span style={{fontSize:".76rem",color:B.gray,minWidth:60}}>{l}</span>
                     <span style={{fontSize:".82rem",color:B.dark,fontWeight:500}}>{v}</span>
@@ -921,7 +1210,7 @@ function TicketDetail({ticket, onBack, onUpdate}) {
                 <i className="ti ti-tools" style={{marginRight:6,color:B.bronze}} aria-hidden="true"/>Project Details
               </h3>
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-                {[["Project type",t.ptype],["Dimensions",t.len&&t.wid?`${t.len} ft × ${t.wid} ft`:"N/A"],["Square footage",t.sqft>0?`~${t.sqft.toLocaleString()} sqft`:"N/A"],["Thickness",t.thick||"—"],["Finish",t.finish||"—"],["Tear-out",t.tear||"—"],["Grading",t.grade||"—"],["Access",t.access||"—"],["Timeline",t.timeline||"—"]].map(([l,v])=>(
+                {[["Project type",t.ptype],["Dimensions",t.len&&t.wid?`${t.len} ft x ${t.wid} ft`:"N/A"],["Square footage",t.sqft>0?`~${t.sqft.toLocaleString()} sqft`:"N/A"],["Thickness",t.thick||"-"],["Finish",t.finish||"-"],["Tear-out",t.tear||"-"],["Grading",t.grade||"-"],["Access",t.access||"-"],["Timeline",t.timeline||"-"]].map(([l,v])=>(
                   <div key={l}>
                     <div style={{fontSize:".7rem",color:B.gray,marginBottom:1}}>{l}</div>
                     <div style={{fontSize:".82rem",color:B.dark,fontWeight:500}}>{v}</div>
@@ -1027,7 +1316,7 @@ function TicketDetail({ticket, onBack, onUpdate}) {
               </h3>
               <div style={{display:"flex",flexDirection:"column",gap:7}}>
                 <a href={`tel:${t.phone?.replace(/\D/g,"")}`} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",background:B.sandD,borderRadius:6,textDecoration:"none",color:B.dark,fontSize:".78rem",fontWeight:600}}>
-                  <i className="ti ti-phone" style={{fontSize:14,color:B.bronze}} aria-hidden="true"/>Call {t.phone||"—"}
+                  <i className="ti ti-phone" style={{fontSize:14,color:B.bronze}} aria-hidden="true"/>Call {t.phone||"-"}
                 </a>
                 <a href={`mailto:${t.email}`} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",background:B.sandD,borderRadius:6,textDecoration:"none",color:B.dark,fontSize:".78rem",fontWeight:600}}>
                   <i className="ti ti-mail" style={{fontSize:14,color:B.bronze}} aria-hidden="true"/>Email customer
@@ -1050,21 +1339,86 @@ export default function App() {
   const [adminMode, setAdminMode] = useState(false);
   const [adminAuth, setAdminAuth] = useState(false);
   const [tickets, setTickets] = useState(() => DEMO_TICKETS.map(ticket => {
+    const baseTicket = {
+      ...ticket,
+      estimateDecision: ticket.estimateDecision || null,
+      estimateDecisionLabel: ticket.estimateDecisionLabel || "Awaiting decision",
+      decisionQuestion: ticket.decisionQuestion || "Does this estimate range work for your project?",
+      decisionAt: ticket.decisionAt || "",
+      decisionFeedbackReason: ticket.decisionFeedbackReason || "",
+      decisionFeedbackComment: ticket.decisionFeedbackComment || "",
+      notifications: ticket.notifications || [],
+    };
     if (ticket.id === "T-002") {
       return {
-        ...ticket,
-        status: "Estimate Accepted",
-        history: [...(ticket.history || []), { s: "Estimate Accepted", d: new Date().toISOString(), n: "Customer approved estimate. Ready for scheduling." }],
+        ...baseTicket,
+        status: "Interested",
+        estimateDecision: "yes",
+        estimateDecisionLabel: "Yes / Interested",
+        decisionAt: ticket.at,
+        notifications: [{
+          id: "notif-T-002",
+          type: "warm_lead",
+          title: "Warm lead",
+          message: "Customer said the estimate range works and wants to move forward. Reach out for site visit planning.",
+          createdAt: ticket.at,
+        }],
+        history: [...(ticket.history || []), { s: "Interested", d: new Date().toISOString(), n: "Customer selected \"Yes, I'd like to move forward.\" Warm lead logged for site visit follow-up." }],
       };
     }
     if (ticket.id === "T-006") {
       return {
-        ...ticket,
-        status: "Ready to Schedule",
-        history: [...(ticket.history || []), { s: "Ready to Schedule", d: new Date().toISOString(), n: "Office approved estimate for scheduling." }],
+        ...baseTicket,
+        status: "Site Visit Requested",
+        estimateDecision: "yes",
+        estimateDecisionLabel: "Yes / Interested",
+        decisionAt: ticket.at,
+        notifications: [{
+          id: "notif-T-006",
+          type: "warm_lead",
+          title: "Warm lead",
+          message: "Customer wants to move forward. Owner should confirm a site visit call time.",
+          createdAt: ticket.at,
+        }],
+        history: [...(ticket.history || []), { s: "Site Visit Requested", d: new Date().toISOString(), n: "Office queued a site visit request after the customer approved the estimate range." }],
       };
     }
-    return ticket;
+    if (ticket.id === "T-007" || ticket.id === "T-004") {
+      return {
+        ...baseTicket,
+        estimateDecision: "yes",
+        estimateDecisionLabel: "Yes / Interested",
+        decisionAt: ticket.at,
+        notifications: ticket.notifications?.length ? ticket.notifications : [{
+          id: `notif-${ticket.id}`,
+          type: "warm_lead",
+          title: "Warm lead",
+          message: "Customer approved the estimate range and moved forward in the pipeline.",
+          createdAt: ticket.at,
+        }],
+      };
+    }
+    if (ticket.id === "T-008") {
+      return {
+        ...baseTicket,
+        status: "Follow Up Needed",
+        estimateDecision: "no",
+        estimateDecisionLabel: "No / Follow Up Needed",
+        decisionAt: ticket.at,
+        decisionFeedbackReason: ticket.decisionFeedbackReason || "I am comparing other quotes",
+        decisionFeedbackComment: ticket.decisionFeedbackComment || "Still deciding between two contractors and may revisit this later.",
+        followUp: ticket.followUp || "2026-06-18",
+        notifications: [{
+          id: "notif-T-008",
+          type: "sales_follow_up",
+          title: "Sales follow-up",
+          message: "Customer said the estimate range does not work right now. Owner follow-up call recommended.",
+          createdAt: ticket.at,
+        }],
+        history: [...(ticket.history || []), { s: "Follow Up Needed", d: new Date().toISOString(), n: "Customer selected \"No, not at this time.\" Owner follow-up call recommended." }],
+      };
+    }
+    return baseTicket;
   }));
 
   const handleTicketSubmit = ticket => {
@@ -1087,7 +1441,7 @@ export default function App() {
       case "gallery":  return <GalleryPage setPage={setPage}/>;
       case "about":    return <AboutPage setPage={setPage}/>;
       case "contact":  return <ContactPage setPage={setPage}/>;
-      case "estimate": return <EstimatePage onSubmitTicket={handleTicketSubmit}/>;
+      case "estimate": return <EstimatePage onSubmitTicket={handleTicketSubmit} onUpdateTicket={handleTicketUpdate} onReturnHome={()=>setPage("home")}/>;
       default:         return <HomePage setPage={setPage}/>;
     }
   };
@@ -1104,3 +1458,4 @@ export default function App() {
     </div>
   );
 }
+

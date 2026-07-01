@@ -144,10 +144,61 @@ const SCHEMA_TABLES = [
 ];
 
 const DEFAULT_CREWS = [
-  { id: "crew-1", number: 1, name: "Crew 1", foreman: "Luis Martinez", dailyCapacity: 1, notes: "Flatwork and residential pours." },
-  { id: "crew-2", number: 2, name: "Crew 2", foreman: "Jason Webb", dailyCapacity: 1, notes: "Builder slab production crew." },
-  { id: "crew-3", number: 3, name: "Crew 3", foreman: "Chris Mullins", dailyCapacity: 1, notes: "Repairs, small patios, punch work." },
+  { id: "crew-1", crewNumber: 1, name: "Crew 1", foreman: "Luis Martinez", description: "Flatwork and residential pours.", dailyCapacity: 1, phone: "", status: "active" },
+  { id: "crew-2", crewNumber: 2, name: "Crew 2", foreman: "Jason Webb", description: "Builder slab production crew.", dailyCapacity: 1, phone: "", status: "active" },
+  { id: "crew-3", crewNumber: 3, name: "Crew 3", foreman: "Chris Mullins", description: "Repairs, small patios, punch work.", dailyCapacity: 1, phone: "", status: "active" },
 ];
+const CREWS_STORAGE_KEY = "southernOakCrews";
+
+const makeCrewId = () => globalThis.crypto?.randomUUID?.() || `crew-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+const normalizeCrew = (crew, index = 0) => {
+  const crewNumber = Number(crew.crewNumber ?? crew.number ?? index + 1);
+  const name = (crew.name || "").trim() || `Crew ${crewNumber}`;
+  const description = crew.description ?? crew.notes ?? "";
+  return {
+    id: crew.id || makeCrewId(),
+    crewNumber,
+    number: crewNumber,
+    name,
+    foreman: crew.foreman || "",
+    description,
+    notes: description,
+    dailyCapacity: Number(crew.dailyCapacity || 1),
+    phone: crew.phone || "",
+    status: crew.status === "inactive" ? "inactive" : "active",
+  };
+};
+const getNextCrewNumber = crews => {
+  const used = new Set(crews.map(crew => Number(crew.crewNumber ?? crew.number)).filter(Boolean));
+  let next = 1;
+  while (used.has(next)) next += 1;
+  return next;
+};
+const buildNewCrewDraft = crews => {
+  const nextNumber = getNextCrewNumber(crews);
+  return normalizeCrew({
+    id: makeCrewId(),
+    crewNumber: nextNumber,
+    name: `Crew ${nextNumber}`,
+    foreman: "",
+    description: "",
+    dailyCapacity: 1,
+    phone: "",
+    status: "active",
+  }, crews.length);
+};
+const readStoredCrews = () => {
+  if (typeof window === "undefined") return DEFAULT_CREWS.map(normalizeCrew);
+  try {
+    const raw = window.localStorage.getItem(CREWS_STORAGE_KEY);
+    if (!raw) return DEFAULT_CREWS.map(normalizeCrew);
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed) || !parsed.length) return DEFAULT_CREWS.map(normalizeCrew);
+    return parsed.map(normalizeCrew);
+  } catch {
+    return DEFAULT_CREWS.map(normalizeCrew);
+  }
+};
 
 const DEFAULT_BUILDERS = [
   { id: "builder-valor", name: "Valor", contact: "Matt Collins", phone: "(770) 555-1001", communities: ["Pine Brook", "Oak Trace"], color: BUILDER_COLOR_PALETTE[0] },
@@ -176,8 +227,22 @@ const getLatestNotification = ticket => {
   return notifications.length ? notifications[notifications.length - 1] : null;
 };
 const fmtCap = n => `${Number(n || 0).toFixed(Number(n || 0) % 1 ? 2 : 0)} day`;
+const fmtMetricNumber = n => `${Number(n || 0).toFixed(Number(n || 0) % 1 ? 2 : 0)}`;
 const clampDateValue = d => new Date(`${d}T12:00:00`);
 const getDayOfWeek = d => clampDateValue(d).getDay();
+const getCrewStatusMeta = (todayLoad, dailyCapacity) => {
+  if (todayLoad > dailyCapacity + 0.0001) return { label: "Overbooked", tone: "overbooked" };
+  if (todayLoad > 0.0001) return { label: "Scheduled", tone: "scheduled" };
+  return { label: "Available", tone: "available" };
+};
+const getCrewProgressTone = (todayLoad, dailyCapacity) => {
+  const safeCapacity = Number(dailyCapacity || 0);
+  if (safeCapacity <= 0) return "overbooked";
+  const ratio = todayLoad / safeCapacity;
+  if (ratio > 1) return "overbooked";
+  if (ratio >= 0.8) return "near";
+  return "good";
+};
 const isSunday = d => getDayOfWeek(d) === 0;
 const isSaturday = d => getDayOfWeek(d) === 6;
 const isWeekend = d => isSaturday(d) || isSunday(d);
@@ -253,8 +318,8 @@ function DecisionPill({ ticket, short = false }) {
   return <span style={{ display: "inline-block", padding: "3px 10px", borderRadius: 20, background: cfg.bg, color: cfg.c, fontWeight: 700, fontSize: ".68rem", whiteSpace: "nowrap" }}>{short ? cfg.short : cfg.label}</span>;
 }
 
-function Card({ children, style = {}, className = "" }) {
-  return <div className={className} style={{ background: B.white, borderRadius: 8, padding: 18, border: `1px solid ${B.border}`, ...style }}>{children}</div>;
+function Card({ children, style = {}, className = "", ...props }) {
+  return <div className={className} style={{ background: B.white, borderRadius: 8, padding: 18, border: `1px solid ${B.border}`, ...style }} {...props}>{children}</div>;
 }
 
 function Modal({ title, children, onClose, width = 720 }) {
@@ -439,6 +504,10 @@ function findCrewById(crews, id) {
   return crews.find(crew => crew.id === id);
 }
 
+function getCrewNumber(crew) {
+  return Number(crew?.crewNumber ?? crew?.number ?? 0);
+}
+
 function detectCrewConflicts({ candidateEvents, jobs, crews, ignoreEventIds = [] }) {
   const existingEvents = buildCalendarEvents(jobs).filter(event => !ignoreEventIds.includes(event.id) && event.counts_toward_crew);
   const conflicts = [];
@@ -561,6 +630,12 @@ function SidebarBrand() {
 }
 
 function AdminSidebar({ section, setSection, financeView, setFinanceView, alerts, mobileOpen, onClose }) {
+  const financeSubsections = [
+    { id: "overview", label: "Overview" },
+    { id: "revenue", label: "Revenue" },
+    { id: "payments", label: "Payments" },
+    { id: "reports", label: "Reports" },
+  ];
   return (
     <>
       {mobileOpen && <button onClick={onClose} aria-label="Close navigation" style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.42)", border: "none", padding: 0, zIndex: 3090 }} />}
@@ -577,72 +652,68 @@ function AdminSidebar({ section, setSection, financeView, setFinanceView, alerts
           {ADMIN_SECTIONS.map(item => {
             const active = section === item.id;
             return (
-              <button
-                key={item.id}
-                onClick={() => {
-                  setSection(item.id);
-                  onClose();
-                }}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 10,
-                  width: "100%",
-                  minHeight: 44,
-                  padding: "10px 12px",
-                  borderRadius: 10,
-                  border: `1px solid ${active ? "rgba(154,116,26,.32)" : "rgba(243,232,208,.08)"}`,
-                  background: active ? "rgba(154,116,26,.14)" : "transparent",
-                  color: active ? "var(--oak-cream)" : "rgba(243,232,208,.78)",
-                  cursor: "pointer",
-                  fontFamily: "inherit",
-                  fontWeight: 700,
-                  fontSize: ".82rem",
-                  textAlign: "left",
-                }}
-              >
-                <i className={`ti ${item.icon}`} style={{ fontSize: 16 }} aria-hidden="true" />
-                <span>{item.label}</span>
-              </button>
+              <div key={item.id} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                <button
+                  onClick={() => {
+                    setSection(item.id);
+                    onClose();
+                  }}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 10,
+                    width: "100%",
+                    minHeight: 44,
+                    padding: "10px 12px",
+                    borderRadius: 10,
+                    border: `1px solid ${active ? "rgba(154,116,26,.32)" : "rgba(243,232,208,.08)"}`,
+                    background: active ? "rgba(154,116,26,.14)" : "transparent",
+                    color: active ? "var(--oak-cream)" : "rgba(243,232,208,.78)",
+                    cursor: "pointer",
+                    fontFamily: "inherit",
+                    fontWeight: 700,
+                    fontSize: ".82rem",
+                    textAlign: "left",
+                  }}
+                >
+                  <i className={`ti ${item.icon}`} style={{ fontSize: 16 }} aria-hidden="true" />
+                  <span>{item.label}</span>
+                </button>
+                {item.id === "finance" && section === "finance" && (
+                  <div style={{ marginLeft: 10, display: "flex", flexDirection: "column", gap: 6, paddingLeft: 12, borderLeft: "1px solid rgba(243,232,208,.14)" }}>
+                    {financeSubsections.map(subItem => {
+                      const subActive = financeView === subItem.id;
+                      return (
+                        <button
+                          key={subItem.id}
+                          onClick={() => setFinanceView(subItem.id)}
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 8,
+                            minHeight: 40,
+                            padding: "8px 10px",
+                            borderRadius: 8,
+                            border: "none",
+                            background: subActive ? "rgba(23,35,21,.48)" : "transparent",
+                            color: subActive ? "var(--oak-tan)" : "rgba(243,232,208,.68)",
+                            cursor: "pointer",
+                            fontFamily: "inherit",
+                            fontWeight: 700,
+                            fontSize: ".76rem",
+                            textAlign: "left",
+                          }}
+                        >
+                          <span style={{ width: 6, height: 6, borderRadius: 999, background: subActive ? "var(--oak-gold)" : "rgba(243,232,208,.24)", display: "inline-block" }} />
+                          {subItem.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             );
           })}
-          {section === "finance" && (
-            <div style={{ marginTop: 4, marginLeft: 10, display: "flex", flexDirection: "column", gap: 6, paddingLeft: 12, borderLeft: "1px solid rgba(243,232,208,.14)" }}>
-              {[
-                { id: "overview", label: "Overview" },
-                { id: "revenue", label: "Revenue" },
-                { id: "payments", label: "Payments" },
-                { id: "reports", label: "Reports" },
-              ].map(item => {
-                const active = financeView === item.id;
-                return (
-                  <button
-                    key={item.id}
-                    onClick={() => setFinanceView(item.id)}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 8,
-                      minHeight: 40,
-                      padding: "8px 10px",
-                      borderRadius: 8,
-                      border: "none",
-                      background: active ? "rgba(23,35,21,.48)" : "transparent",
-                      color: active ? "var(--oak-tan)" : "rgba(243,232,208,.68)",
-                      cursor: "pointer",
-                      fontFamily: "inherit",
-                      fontWeight: 700,
-                      fontSize: ".76rem",
-                      textAlign: "left",
-                    }}
-                  >
-                    <span style={{ width: 6, height: 6, borderRadius: 999, background: active ? "var(--oak-gold)" : "rgba(243,232,208,.24)", display: "inline-block" }} />
-                    {item.label}
-                  </button>
-                );
-              })}
-            </div>
-          )}
         </div>
       </aside>
     </>
@@ -1473,50 +1544,256 @@ function JobsSection({ jobs, onSelectJob, onCreateBuilderJob }) {
   );
 }
 
-function CrewsSection({ crews, jobs, onUpdateCrew }) {
+function CrewsSection({ crews, jobs, onUpdateCrew, onCreateCrew }) {
+  const [crewDraft, setCrewDraft] = useState(null);
   const events = useMemo(() => buildCalendarEvents(jobs), [jobs]);
   const crewSummaries = crews.map(crew => {
     const todaysEvents = events.filter(event => event.crew_id === crew.id && event.date === todayIso() && event.counts_toward_crew);
     const todayLoad = todaysEvents.reduce((sum, event) => sum + Number(event.capacity_used || 0), 0);
-    const upcoming = events.filter(event => event.crew_id === crew.id && event.date >= todayIso()).slice(0, 4);
-    return { crew, todayLoad, upcoming };
+    const upcoming = events
+      .filter(event => event.crew_id === crew.id && event.date >= todayIso())
+      .sort((a, b) => `${a.date} ${a.time || "07:00"}`.localeCompare(`${b.date} ${b.time || "07:00"}`))
+      .slice(0, 4);
+    const status = getCrewStatusMeta(todayLoad, crew.dailyCapacity);
+    const progressTone = getCrewProgressTone(todayLoad, crew.dailyCapacity);
+    const capacityPercent = crew.dailyCapacity > 0 ? Math.min((todayLoad / crew.dailyCapacity) * 100, 100) : 100;
+    return { crew, todayLoad, upcoming, status, progressTone, capacityPercent };
   });
+  const scheduledToday = events.filter(event => event.date === todayIso() && event.counts_toward_crew).length;
+  const overbookedCrews = crewSummaries.filter(item => item.todayLoad > item.crew.dailyCapacity + 0.0001).length;
+  const availableCapacity = crewSummaries.reduce((sum, item) => sum + Math.max(Number(item.crew.dailyCapacity || 0) - item.todayLoad, 0), 0);
+  const openCreateCrew = () => setCrewDraft({ mode: "create", ...buildNewCrewDraft(crews) });
+  const openEditCrew = crew => setCrewDraft({ mode: "edit", ...normalizeCrew(crew) });
+  const closeCrewEditor = () => setCrewDraft(null);
+  const saveCrew = draft => {
+    const normalized = normalizeCrew(draft);
+    if (draft.mode === "create") {
+      onCreateCrew(normalized);
+    } else {
+      onUpdateCrew(normalized.id, normalized);
+    }
+    closeCrewEditor();
+  };
+
   return (
     <>
       <Card style={{ marginBottom: 14 }}>
-        <h1 style={{ fontSize: "1.25rem", fontWeight: 700, color: B.dark, marginBottom: 4 }}>Crews</h1>
-        <p style={{ fontSize: ".8rem", color: B.gray }}>Set daily capacity, review active workload, and catch crew assignments that are overbooked.</p>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+          <div>
+            <h1 style={{ fontSize: "1.25rem", fontWeight: 700, color: B.dark, marginBottom: 4 }}>Crews</h1>
+            <p style={{ fontSize: ".8rem", color: B.gray }}>Set daily capacity, review active workload, and catch crew assignments that are overbooked.</p>
+          </div>
+          <Btn v="primary" onClick={openCreateCrew}>
+            <i className="ti ti-plus" style={{ marginRight: 6, fontSize: 13 }} aria-hidden="true" />
+            Add Crew
+          </Btn>
+        </div>
       </Card>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(260px,1fr))", gap: 12 }}>
-        {crewSummaries.map(({ crew, todayLoad, upcoming }) => (
-          <Card key={crew.id}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, marginBottom: 12 }}>
+      <div className="crews-summary-grid">
+        {[
+          { label: "Total Crews", value: crews.length, helper: "Active field crews" },
+          { label: "Scheduled Today", value: scheduledToday, helper: "Crew assignments on the board" },
+          { label: "Overbooked Crews", value: overbookedCrews, helper: "Need capacity review" },
+          { label: "Available Capacity", value: fmtMetricNumber(availableCapacity), helper: "Days open across crews" },
+        ].map(metric => (
+          <Card key={metric.label} className="crew-metric-card">
+            <div className="crew-metric-label">{metric.label}</div>
+            <div className="crew-metric-value">{metric.value}</div>
+            <div className="crew-metric-helper">{metric.helper}</div>
+          </Card>
+        ))}
+      </div>
+      <div className="crews-grid">
+        {crewSummaries.map(({ crew, todayLoad, upcoming, status, progressTone, capacityPercent }) => (
+          <Card key={crew.id} className="crew-card crew-card--interactive" style={{ cursor: "pointer" }} onClick={() => openEditCrew(crew)}>
+            <div className="crew-card-header">
               <div>
-                <div style={{ fontWeight: 700, color: B.dark, fontSize: ".95rem" }}>{crew.name}</div>
-                <div style={{ fontSize: ".74rem", color: B.gray }}>Foreman: {crew.foreman}</div>
+                <div className="crew-card-eyebrow">Field Crew</div>
+                <div className="crew-card-title">{crew.name}</div>
+                <div className="crew-card-foreman">Foreman: {crew.foreman}</div>
               </div>
-              <Pill status={todayLoad > crew.dailyCapacity ? "Delayed" : "Scheduled"} label={`${todayLoad.toFixed(2)} / ${crew.dailyCapacity.toFixed(2)} day`} />
+              <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 8 }}>
+                <span className={`crew-status-pill crew-status-pill--${status.tone}`}>{status.label}</span>
+                <button
+                  onClick={e => {
+                    e.stopPropagation();
+                    openEditCrew(crew);
+                  }}
+                  className="crew-edit-button"
+                  type="button"
+                >
+                  <i className="ti ti-pencil" style={{ fontSize: 12 }} aria-hidden="true" />
+                  Edit
+                </button>
+              </div>
             </div>
-            <div style={{ fontSize: ".76rem", color: B.gray, lineHeight: 1.6, marginBottom: 10 }}>{crew.notes}</div>
-            <div style={{ marginBottom: 10 }}>
-              <label style={{ display: "block", fontSize: ".72rem", color: B.gray, marginBottom: 4 }}>Daily capacity</label>
-              <input style={INP} type="number" step="0.25" value={crew.dailyCapacity} onChange={e => onUpdateCrew(crew.id, { dailyCapacity: Number(e.target.value || 1) })} />
-            </div>
-            <div style={{ fontSize: ".74rem", color: B.gray, fontWeight: 700, marginBottom: 6 }}>Upcoming assignments</div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              {upcoming.length === 0 && <div style={{ fontSize: ".74rem", color: B.gray }}>No upcoming scheduled work.</div>}
+            <div className="crew-card-body">
+              <div className="crew-card-notes">{crew.description}</div>
+
+              <div className="crew-workload-panel">
+                <div className="crew-workload-head">
+                  <div>
+                    <div className="crew-section-label">Workload Today</div>
+                    <div className="crew-workload-value">{fmtMetricNumber(todayLoad)} / {fmtMetricNumber(crew.dailyCapacity)} day</div>
+                  </div>
+                  <span className={`crew-load-badge crew-load-badge--${progressTone}`}>
+                    {todayLoad > crew.dailyCapacity + 0.0001 ? "Over capacity" : todayLoad > 0 ? "On schedule" : "Open"}
+                  </span>
+                </div>
+                <div className="crew-progress-track" aria-hidden="true">
+                  <div className={`crew-progress-fill crew-progress-fill--${progressTone}`} style={{ width: `${capacityPercent}%` }} />
+                </div>
+              </div>
+
+              <div className="crew-capacity-panel">
+                <label className="crew-section-label">Daily Capacity</label>
+                <input
+                  className="crew-capacity-input"
+                  style={INP}
+                  type="number"
+                  step="0.25"
+                  value={crew.dailyCapacity}
+                  onClick={e => e.stopPropagation()}
+                  onFocus={e => e.stopPropagation()}
+                  onChange={e => onUpdateCrew(crew.id, { dailyCapacity: Number(e.target.value || 1) })}
+                />
+              </div>
+
+              <div className="crew-section-label" style={{ marginBottom: 8 }}>Upcoming Assignments</div>
+              <div className="crew-assignment-list">
+              {upcoming.length === 0 && (
+                <div className="crew-empty-state">
+                  <i className="ti ti-calendar-off" style={{ fontSize: 18, color: B.lgray }} aria-hidden="true" />
+                  <div>
+                    <div style={{ fontWeight: 700, color: B.mid, marginBottom: 2 }}>No upcoming scheduled work</div>
+                    <div>New assignments will appear here once this crew is placed on the board.</div>
+                  </div>
+                </div>
+              )}
               {upcoming.map(event => (
-                <div key={event.id} style={{ padding: "8px 10px", borderRadius: 6, background: B.sand, fontSize: ".74rem", color: B.mid }}>
-                  <div style={{ fontWeight: 700 }}>{event.phase_label}</div>
-                  <div>{fmtDate(event.date)} - {event.time}</div>
-                  <div>{event.schedule_type === "builder_slab" ? `${event.builder_name} - Lot ${event.lot_number}` : event.customer_name}</div>
+                <div key={event.id} className={`crew-assignment-card crew-assignment-card--${event.schedule_type === "builder_slab" ? "builder" : "residential"}`}>
+                  <div className="crew-assignment-icon">
+                    <i className={`ti ${event.schedule_type === "builder_slab" ? "ti-building-community" : "ti-home"}`} aria-hidden="true" />
+                  </div>
+                  <div className="crew-assignment-content">
+                    <div className="crew-assignment-title">{event.phase_label}</div>
+                    <div className="crew-assignment-meta">{fmtDate(event.date)} - {event.time}</div>
+                    <div className="crew-assignment-detail">{event.schedule_type === "builder_slab" ? `${event.builder_name} - Lot ${event.lot_number}` : event.customer_name}</div>
+                  </div>
                 </div>
               ))}
+              </div>
             </div>
           </Card>
         ))}
       </div>
+      {crewDraft && <CrewEditorModal draft={crewDraft} crews={crews} onClose={closeCrewEditor} onSave={saveCrew} />}
     </>
+  );
+}
+
+function CrewEditorModal({ draft, crews, onClose, onSave }) {
+  const [local, setLocal] = useState(draft);
+  const [error, setError] = useState("");
+  const isCreate = local.mode === "create";
+
+  const updateField = patch => {
+    setLocal(prev => ({ ...prev, ...patch }));
+    if (error) setError("");
+  };
+
+  const submit = () => {
+    const crewNumber = Number(local.crewNumber);
+    const dailyCapacity = Number(local.dailyCapacity);
+    if (!crewNumber) {
+      setError("Crew number is required.");
+      return;
+    }
+    if (!local.name.trim()) {
+      setError("Crew name is required.");
+      return;
+    }
+    if (!local.foreman.trim()) {
+      setError("Foreman name is required.");
+      return;
+    }
+    if (!(dailyCapacity > 0)) {
+      setError("Daily capacity must be greater than 0.");
+      return;
+    }
+    const duplicate = crews.some(crew => crew.id !== local.id && getCrewNumber(crew) === crewNumber);
+    if (duplicate) {
+      setError("Crew numbers must be unique.");
+      return;
+    }
+    onSave({
+      ...local,
+      crewNumber,
+      number: crewNumber,
+      name: local.name.trim(),
+      foreman: local.foreman.trim(),
+      description: local.description.trim(),
+      notes: local.description.trim(),
+      dailyCapacity,
+      phone: local.phone.trim(),
+      status: local.status === "inactive" ? "inactive" : "active",
+    });
+  };
+
+  return (
+    <div className="crew-modal-overlay" onClick={onClose}>
+      <div className="crew-modal-shell" onClick={e => e.stopPropagation()}>
+        <div className="crew-modal-header">
+          <div>
+            <div className="crew-modal-eyebrow">{isCreate ? "Add Crew" : "Edit Crew"}</div>
+            <div className="crew-modal-title">{isCreate ? "Create a new crew" : `Update ${local.name}`}</div>
+          </div>
+          <button onClick={onClose} className="crew-modal-close" type="button" aria-label="Close crew editor">
+            <i className="ti ti-x" aria-hidden="true" />
+          </button>
+        </div>
+        <div className="crew-modal-body">
+          <div className="crew-modal-grid">
+            <div>
+              <label style={labelStyle}>Crew Number</label>
+              <input style={INP} type="number" min="1" value={local.crewNumber} onChange={e => updateField({ crewNumber: e.target.value })} />
+            </div>
+            <div>
+              <label style={labelStyle}>Daily Capacity</label>
+              <input style={INP} type="number" step="0.25" min="0.25" value={local.dailyCapacity} onChange={e => updateField({ dailyCapacity: e.target.value })} />
+            </div>
+            <div>
+              <label style={labelStyle}>Crew Name</label>
+              <input style={INP} type="text" value={local.name} onChange={e => updateField({ name: e.target.value })} />
+            </div>
+            <div>
+              <label style={labelStyle}>Foreman</label>
+              <input style={INP} type="text" value={local.foreman} onChange={e => updateField({ foreman: e.target.value })} />
+            </div>
+            <div>
+              <label style={labelStyle}>Phone</label>
+              <input style={INP} type="text" value={local.phone || ""} onChange={e => updateField({ phone: e.target.value })} placeholder="Optional" />
+            </div>
+            <div>
+              <label style={labelStyle}>Status</label>
+              <select style={{ ...INP, cursor: "pointer" }} value={local.status || "active"} onChange={e => updateField({ status: e.target.value })}>
+                <option value="active">Active</option>
+                <option value="inactive">Inactive</option>
+              </select>
+            </div>
+            <div style={{ gridColumn: "1 / -1" }}>
+              <label style={labelStyle}>Description</label>
+              <textarea style={{ ...INP, minHeight: 110, resize: "vertical" }} value={local.description || ""} onChange={e => updateField({ description: e.target.value })} />
+            </div>
+          </div>
+          {error && <div className="crew-modal-error"><i className="ti ti-alert-circle" style={{ marginRight: 6 }} aria-hidden="true" />{error}</div>}
+          <div className="crew-modal-actions">
+            <Btn v="outline" onClick={onClose}>Cancel</Btn>
+            <Btn v="primary" onClick={submit}>{isCreate ? "Create Crew" : "Save Changes"}</Btn>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -1664,7 +1941,7 @@ function JobDetailView({ job, crews, onBack, onSaveJob, onOpenPhaseEdit }) {
             </div>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
               <span style={{ fontSize: ".78rem", color: B.gray }}>Work order {job.work_order_number || "-"}</span>
-              {crew && <span style={{ fontSize: ".78rem", color: B.gray }}>Crew {crew.number}</span>}
+              {crew && <span style={{ fontSize: ".78rem", color: B.gray }}>Crew {getCrewNumber(crew)}</span>}
             </div>
           </div>
         </Card>
@@ -1860,7 +2137,7 @@ function ConflictModal({ state, crews, onClose, onChooseAnotherDate, onApplyReas
         {state.conflicts.map((conflict, idx) => (
           <Card key={idx} style={{ padding: 14, background: "#FFF8F7", borderColor: "#F5C6C0" }}>
             <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 8 }}>
-              <div style={{ fontWeight: 700, color: "#922B21" }}>Crew {conflict.crew?.number || "-"} capacity would hit {conflict.capacityTotal.toFixed(2)} / {conflict.capacityLimit.toFixed(2)} day</div>
+              <div style={{ fontWeight: 700, color: "#922B21" }}>Crew {getCrewNumber(conflict.crew) || "-"} capacity would hit {conflict.capacityTotal.toFixed(2)} / {conflict.capacityLimit.toFixed(2)} day</div>
               <div style={{ fontSize: ".76rem", color: B.gray }}>{fmtDate(conflict.candidate.date)} - {conflict.candidate.time}</div>
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 8 }}>
@@ -1968,7 +2245,7 @@ export default function AdminWorkspace({ tickets, onUpdateTicket, onLogout, setP
   const [selectedTicketId, setSelectedTicketId] = useState(null);
   const [selectedJobId, setSelectedJobId] = useState(null);
   const [jobs, setJobs] = useState(() => buildDefaultJobs().map(normalizeBuilderJob));
-  const [crews, setCrews] = useState(DEFAULT_CREWS);
+  const [crews, setCrews] = useState(readStoredCrews);
   const [builders, setBuilders] = useState(DEFAULT_BUILDERS);
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
   const [scheduleHistory, setScheduleHistory] = useState([]);
@@ -1989,6 +2266,11 @@ export default function AdminWorkspace({ tickets, onUpdateTicket, onLogout, setP
   const selectedJob = jobs.find(job => job.id === selectedJobId) || null;
   const allEvents = useMemo(() => buildCalendarEvents(jobs), [jobs]);
   const activeConflicts = useMemo(() => detectCrewConflicts({ candidateEvents: [], jobs, crews }), [jobs, crews]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(CREWS_STORAGE_KEY, JSON.stringify(crews.map(normalizeCrew)));
+  }, [crews]);
 
   const openBuilderJobModal = () => {
     if (!builders.length) {
@@ -2439,7 +2721,7 @@ export default function AdminWorkspace({ tickets, onUpdateTicket, onLogout, setP
     if (section === "tickets") return <EstimateTicketsSection tickets={tickets} onSelectTicket={ticket => setSelectedTicketId(ticket.id)} onAcceptTicket={ticket => applyTicketStatus(ticket, "Estimate Accepted", "Estimate accepted and ready for office scheduling.")} onScheduleTicket={openResidentialSchedule} jobs={jobs} />;
     if (section === "calendar") return <CalendarSection jobs={jobs} crews={crews} builders={builders} onOpenJob={jobId => setSelectedJobId(jobId)} pendingResidentialDraft={residentialDraft} onPendingResidentialDraftChange={setResidentialDraft} onSavePendingResidentialSchedule={saveResidentialSchedule} onCancelPendingResidentialSchedule={() => setResidentialDraft(null)} pendingBuilderSchedule={builderScheduleDraft} onPendingBuilderScheduleChange={setBuilderScheduleDraft} onSavePendingBuilderSchedule={saveBuilderSchedule} onCancelPendingBuilderSchedule={() => setBuilderScheduleDraft(null)} />;
     if (section === "jobs") return <JobsSection jobs={jobs} onSelectJob={jobId => setSelectedJobId(jobId)} onCreateBuilderJob={openBuilderJobModal} />;
-    if (section === "crews") return <CrewsSection crews={crews} jobs={jobs} onUpdateCrew={(crewId, patch) => setCrews(prev => prev.map(crew => crew.id === crewId ? { ...crew, ...patch } : crew))} />;
+    if (section === "crews") return <CrewsSection crews={crews} jobs={jobs} onCreateCrew={crew => setCrews(prev => [...prev, normalizeCrew(crew)])} onUpdateCrew={(crewId, patch) => setCrews(prev => prev.map(crew => crew.id === crewId ? normalizeCrew({ ...crew, ...patch }) : crew))} />;
     if (section === "builders") return <BuildersSection builders={builders} jobs={jobs} onCreateBuilderJob={openBuilderJobModal} onCreateBuilder={() => setBuilderRecordDraft({ name: "", contact: "", phone: "", communities: "" })} onOpenJob={jobId => setSelectedJobId(jobId)} />;
     if (section === "finance") return <FinanceDashboard financeView={financeView} onFinanceViewChange={setFinanceView} />;
     return <SettingsSection settings={settings} onUpdateSettings={patch => setSettings(prev => ({ ...prev, ...patch }))} historyCounts={{ scheduleChanges: scheduleHistory.length, overrides: overrideHistory.length }} />;

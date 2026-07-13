@@ -2,41 +2,21 @@
 
 
 import FinanceDashboard from "./adminFinanceDashboard";
-
-const B = {
-  dark: "#16130D",
-  dark2: "#121A10",
-  mid: "#16130D",
-  gray: "#66705F",
-  lgray: "#98A18F",
-  border: "#D8D2C3",
-  sand: "#FAFAF7",
-  sandD: "#F5F6F2",
-  tan: "#D4B47D",
-  bronze: "#9A741A",
-  bronzeL: "#B98A2E",
-  green: "#172315",
-  green2: "#25301E",
-  white: "#FFFFFF",
-};
+import { supabase } from "./lib/supabase";
+import BuildersSection from "./features/admin/builders/BuildersSection";
+import BuilderRecordModal from "./features/admin/builders/BuilderRecordModal";
+import { BUILDER_COLOR_PALETTE, BUILDER_PHASES, sortBuilderPhases } from "./features/admin/builders/builderUtils";
+import { canAccessFinance, canAccessEstimates, canManageCalendar, canViewCalendar, hasFullAccess } from "./features/admin/auth/roles";
+import CrewsSection from "./features/admin/crews/CrewsSection";
+import { appCrewToDatabaseCrew, databaseCrewToAppCrew, normalizeCrew } from "./features/admin/crews/crewMappers";
+import { buildBuilderEvents, buildCalendarEvents, buildResidentialEvents, findCrewById, getCrewNumber } from "./features/admin/crews/crewUtils";
+import { useBuilders } from "./features/admin/hooks/useBuilders";
+import { Btn, Card, Modal } from "./features/admin/shared/AdminPrimitives";
+import { fmtDate, fmtMetricNumber, todayIso } from "./features/admin/shared/adminFormatters";
+import { B, INP, labelStyle } from "./features/admin/shared/adminStyles";
 
 const BRAND_LOGO_SRC = `${import.meta.env.BASE_URL}branding/main_logo.png`;
 const RESIDENTIAL_EVENT_COLOR = "#6C3483";
-const BUILDER_COLOR_PALETTE = ["#2D6A4F", "#A15C16", "#1F5F8B", "#8B3D5E", "#546A2E", "#6C4A8B"];
-
-const INP = {
-  width: "100%",
-  padding: "9px 12px",
-  border: `1px solid ${B.border}`,
-  borderRadius: 6,
-  fontSize: ".88rem",
-  fontFamily: "inherit",
-  background: B.white,
-  color: B.dark,
-  outline: "none",
-  boxSizing: "border-box",
-};
-
 const ADMIN_SECTIONS = [
   { id: "dashboard", label: "Dashboard", icon: "ti-layout-dashboard" },
   { id: "tickets", label: "Estimate Tickets", icon: "ti-file-text" },
@@ -47,6 +27,20 @@ const ADMIN_SECTIONS = [
   { id: "finance", label: "Finance", icon: "ti-chart-pie-3" },
   { id: "settings", label: "Settings", icon: "ti-settings" },
 ];
+
+const getAllowedAdminSections = role => ADMIN_SECTIONS.filter(section => {
+  if (section.id === "dashboard") return role !== "field";
+  if (section.id === "tickets") return canAccessEstimates(role);
+  if (section.id === "calendar") return canViewCalendar(role);
+  if (section.id === "jobs") return role !== "field";
+  if (section.id === "crews") return hasFullAccess(role);
+  if (section.id === "builders") return hasFullAccess(role);
+  if (section.id === "finance") return canAccessFinance(role);
+  if (section.id === "settings") return hasFullAccess(role);
+  return false;
+});
+
+const getDefaultAdminSection = role => getAllowedAdminSections(role)[0]?.id || "calendar";
 
 const SECTION_SUBTITLES = {
   dashboard: "Operations overview and quick access",
@@ -123,13 +117,6 @@ const RESPONSIBLE_PARTIES = [
   "Other",
 ];
 
-const BUILDER_PHASES = [
-  { key: "prep_slab", label: "Prep Slab", responsible_party: "Southern Oak Concrete", counts_toward_crew: true },
-  { key: "form_slab", label: "Form Slab", responsible_party: "Southern Oak Concrete", counts_toward_crew: true },
-  { key: "pour_slab", label: "Pour Slab", responsible_party: "Southern Oak Concrete", counts_toward_crew: true },
-];
-const BUILDER_PHASE_INDEX = new Map(BUILDER_PHASES.map((phase, idx) => [phase.key, idx]));
-
 const SCHEMA_TABLES = [
   "estimates",
   "estimate_status_history",
@@ -143,76 +130,12 @@ const SCHEMA_TABLES = [
   "conflict_override_history",
 ];
 
-const DEFAULT_CREWS = [
-  { id: "crew-1", crewNumber: 1, name: "Crew 1", foreman: "Luis Martinez", description: "Flatwork and residential pours.", dailyCapacity: 1, phone: "", status: "active" },
-  { id: "crew-2", crewNumber: 2, name: "Crew 2", foreman: "Jason Webb", description: "Builder slab production crew.", dailyCapacity: 1, phone: "", status: "active" },
-  { id: "crew-3", crewNumber: 3, name: "Crew 3", foreman: "Chris Mullins", description: "Repairs, small patios, punch work.", dailyCapacity: 1, phone: "", status: "active" },
-];
-const CREWS_STORAGE_KEY = "southernOakCrews";
-
-const makeCrewId = () => globalThis.crypto?.randomUUID?.() || `crew-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-const normalizeCrew = (crew, index = 0) => {
-  const crewNumber = Number(crew.crewNumber ?? crew.number ?? index + 1);
-  const name = (crew.name || "").trim() || `Crew ${crewNumber}`;
-  const description = crew.description ?? crew.notes ?? "";
-  return {
-    id: crew.id || makeCrewId(),
-    crewNumber,
-    number: crewNumber,
-    name,
-    foreman: crew.foreman || "",
-    description,
-    notes: description,
-    dailyCapacity: Number(crew.dailyCapacity || 1),
-    phone: crew.phone || "",
-    status: crew.status === "inactive" ? "inactive" : "active",
-  };
-};
-const getNextCrewNumber = crews => {
-  const used = new Set(crews.map(crew => Number(crew.crewNumber ?? crew.number)).filter(Boolean));
-  let next = 1;
-  while (used.has(next)) next += 1;
-  return next;
-};
-const buildNewCrewDraft = crews => {
-  const nextNumber = getNextCrewNumber(crews);
-  return normalizeCrew({
-    id: makeCrewId(),
-    crewNumber: nextNumber,
-    name: `Crew ${nextNumber}`,
-    foreman: "",
-    description: "",
-    dailyCapacity: 1,
-    phone: "",
-    status: "active",
-  }, crews.length);
-};
-const readStoredCrews = () => {
-  if (typeof window === "undefined") return DEFAULT_CREWS.map(normalizeCrew);
-  try {
-    const raw = window.localStorage.getItem(CREWS_STORAGE_KEY);
-    if (!raw) return DEFAULT_CREWS.map(normalizeCrew);
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed) || !parsed.length) return DEFAULT_CREWS.map(normalizeCrew);
-    return parsed.map(normalizeCrew);
-  } catch {
-    return DEFAULT_CREWS.map(normalizeCrew);
-  }
-};
-
-const DEFAULT_BUILDERS = [
-  { id: "builder-valor", name: "Valor", contact: "Matt Collins", phone: "(770) 555-1001", communities: ["Pine Brook", "Oak Trace"], color: BUILDER_COLOR_PALETTE[0] },
-  { id: "builder-smith-douglas", name: "Smith Douglas", contact: "Amy Perry", phone: "(678) 555-2214", communities: ["The Reserve", "Pike Landing"], color: BUILDER_COLOR_PALETTE[1] },
-];
-
 const DEFAULT_SETTINGS = {
   skipWeekendsByDefault: true,
   allowWeekendOverride: true,
   defaultCrewCapacity: 1,
 };
 
-const todayIso = () => new Date().toISOString().slice(0, 10);
-const fmtDate = iso => iso ? new Date(`${iso}T12:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "-";
 const fmtDateShort = iso => iso ? new Date(`${iso}T12:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "-";
 const fmtTime = value => value || "-";
 const fmtMoney = n => n != null ? `$${Number(n).toLocaleString()}` : "-";
@@ -227,22 +150,8 @@ const getLatestNotification = ticket => {
   return notifications.length ? notifications[notifications.length - 1] : null;
 };
 const fmtCap = n => `${Number(n || 0).toFixed(Number(n || 0) % 1 ? 2 : 0)} day`;
-const fmtMetricNumber = n => `${Number(n || 0).toFixed(Number(n || 0) % 1 ? 2 : 0)}`;
 const clampDateValue = d => new Date(`${d}T12:00:00`);
 const getDayOfWeek = d => clampDateValue(d).getDay();
-const getCrewStatusMeta = (todayLoad, dailyCapacity) => {
-  if (todayLoad > dailyCapacity + 0.0001) return { label: "Overbooked", tone: "overbooked" };
-  if (todayLoad > 0.0001) return { label: "Scheduled", tone: "scheduled" };
-  return { label: "Available", tone: "available" };
-};
-const getCrewProgressTone = (todayLoad, dailyCapacity) => {
-  const safeCapacity = Number(dailyCapacity || 0);
-  if (safeCapacity <= 0) return "overbooked";
-  const ratio = todayLoad / safeCapacity;
-  if (ratio > 1) return "overbooked";
-  if (ratio >= 0.8) return "near";
-  return "good";
-};
 const isSunday = d => getDayOfWeek(d) === 0;
 const isSaturday = d => getDayOfWeek(d) === 6;
 const isWeekend = d => isSaturday(d) || isSunday(d);
@@ -282,29 +191,12 @@ const buildCapacitySegments = total => {
   }
   return parts.length ? parts : [0.25];
 };
-const sortBuilderPhases = phases => [...(phases || [])].sort((a, b) => (BUILDER_PHASE_INDEX.get(a.phase_key) ?? 999) - (BUILDER_PHASE_INDEX.get(b.phase_key) ?? 999));
 const normalizeBuilderJob = job => job.schedule_type === "builder_slab" ? { ...job, phases: sortBuilderPhases(job.phases || []) } : job;
 const eventColor = event => event.color || RESIDENTIAL_EVENT_COLOR;
 
 function Logo({ sm = false }) {
   return (
     <img src={BRAND_LOGO_SRC} alt="Southern Oak Concrete & Construction" style={{ display: "block", height: sm ? 34 : 44, width: "auto" }} />
-  );
-}
-
-function Btn({ children, onClick, v = "primary", sm = false, full = false, style = {}, disabled = false }) {
-  const pads = sm ? "6px 14px" : "10px 20px";
-  const variants = {
-    primary: { background: B.bronze, color: B.white, border: "none" },
-    dark: { background: B.dark, color: B.white, border: "none" },
-    green: { background: B.green, color: B.white, border: "none" },
-    outline: { background: "transparent", color: B.mid, border: `1.5px solid ${B.border}` },
-    danger: { background: "#C0392B", color: B.white, border: "none" },
-  };
-  return (
-    <button className={`oak-button oak-button--${v}`} disabled={disabled} onClick={disabled ? undefined : onClick} style={{ padding: pads, borderRadius: 6, fontSize: sm ? ".78rem" : ".88rem", fontWeight: 700, cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.55 : 1, fontFamily: "inherit", display: full ? "block" : "inline-block", width: full ? "100%" : undefined, textAlign: "center", ...(variants[v] || variants.primary), ...style }}>
-      {children}
-    </button>
   );
 }
 
@@ -316,26 +208,6 @@ function Pill({ status, label }) {
 function DecisionPill({ ticket, short = false }) {
   const cfg = getDecisionStyle(ticket);
   return <span style={{ display: "inline-block", padding: "3px 10px", borderRadius: 20, background: cfg.bg, color: cfg.c, fontWeight: 700, fontSize: ".68rem", whiteSpace: "nowrap" }}>{short ? cfg.short : cfg.label}</span>;
-}
-
-function Card({ children, style = {}, className = "", ...props }) {
-  return <div className={className} style={{ background: B.white, borderRadius: 8, padding: 18, border: `1px solid ${B.border}`, ...style }} {...props}>{children}</div>;
-}
-
-function Modal({ title, children, onClose, width = 720 }) {
-  return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.45)", zIndex: 3000, padding: 20, overflowY: "auto" }}>
-      <div style={{ maxWidth: width, margin: "40px auto", background: B.white, borderRadius: 10, border: `1px solid ${B.border}`, overflow: "hidden" }}>
-        <div style={{ padding: "16px 18px", borderBottom: "0.5px solid var(--color-border-tertiary)", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
-          <div style={{ fontSize: "1rem", fontWeight: 700, color: B.dark }}>{title}</div>
-          <button onClick={onClose} style={{ background: "none", border: "none", color: B.gray, cursor: "pointer", fontSize: "1rem" }}>
-            <i className="ti ti-x" aria-hidden="true" />
-          </button>
-        </div>
-        <div style={{ padding: 18 }}>{children}</div>
-      </div>
-    </div>
-  );
 }
 
 function makePhase(template, date, time, crewId, status = "Ready to Schedule") {
@@ -434,80 +306,6 @@ function buildDefaultJobs() {
   ];
 }
 
-function buildResidentialEvents(job) {
-  if (!job.scheduled_date) return [];
-  const segments = buildCapacitySegments(job.estimated_duration || job.day_capacity_used || 1);
-  let dateCursor = job.scheduled_date;
-  return segments.map((capacity, idx) => {
-    if (idx > 0) dateCursor = nextWorkingDate(dateCursor, 1);
-    return {
-      id: `${job.id}-res-${idx + 1}`,
-      jobId: job.id,
-      phaseId: "",
-      schedule_type: "residential",
-      type_label: "Residential",
-      title: `${job.customer_name} - ${job.job_type}`,
-      customer_name: job.customer_name,
-      builder_name: "",
-      job_type: job.job_type,
-      address: job.job_address,
-      community: "",
-      lot_number: "",
-      work_order_number: job.work_order_number,
-      date: dateCursor,
-      time: idx === 0 ? (job.scheduled_time || "07:00") : "07:00",
-      crew_id: job.crew_id,
-      crew_number: "",
-      capacity_used: idx === 0 ? Number(job.day_capacity_used || capacity) : capacity,
-      counts_toward_crew: true,
-      status: job.status,
-      phase_label: idx > 0 ? `Day ${idx + 1}` : "Scheduled Work",
-      color: RESIDENTIAL_EVENT_COLOR,
-    };
-  });
-}
-
-function buildBuilderEvents(job) {
-  return sortBuilderPhases(job.phases || [])
-    .filter(phase => phase.scheduled_date)
-    .map(phase => ({
-      id: `${job.id}-${phase.id}`,
-      jobId: job.id,
-      phaseId: phase.id,
-      schedule_type: "builder_slab",
-      type_label: "Builder",
-      title: `${job.builder_name} - Lot ${job.lot_number} - ${phase.phase_label}`,
-      customer_name: "",
-      builder_id: job.builder_id,
-      builder_name: job.builder_name,
-      color: job.builder_color || BUILDER_COLOR_PALETTE[0],
-      job_type: "Builder Slab",
-      address: job.job_address,
-      community: job.community,
-      lot_number: job.lot_number,
-      work_order_number: job.work_order_number,
-      date: phase.scheduled_date,
-      time: phase.scheduled_time || "07:00",
-      crew_id: phase.crew_id || "",
-      capacity_used: Number(phase.day_capacity_used || 0),
-      counts_toward_crew: phase.counts_toward_crew && !!phase.crew_id,
-      status: phase.status,
-      phase_label: phase.phase_label,
-    }));
-}
-
-function buildCalendarEvents(jobs) {
-  return jobs.flatMap(job => job.schedule_type === "builder_slab" ? buildBuilderEvents(job) : buildResidentialEvents(job));
-}
-
-function findCrewById(crews, id) {
-  return crews.find(crew => crew.id === id);
-}
-
-function getCrewNumber(crew) {
-  return Number(crew?.crewNumber ?? crew?.number ?? 0);
-}
-
 function detectCrewConflicts({ candidateEvents, jobs, crews, ignoreEventIds = [] }) {
   const existingEvents = buildCalendarEvents(jobs).filter(event => !ignoreEventIds.includes(event.id) && event.counts_toward_crew);
   const conflicts = [];
@@ -584,7 +382,7 @@ function buildBuilderJobFromDraft(draft, builders) {
   };
 }
 
-function AdminHeader({ section, setSection, onLogout, setPage, alerts }) {
+function AdminHeader({ section, setSection, onLogout, setPage, alerts, sections = ADMIN_SECTIONS }) {
   return (
     <div className="admin-header-shell" style={{ background: B.dark }}>
       <div style={{ maxWidth: 1220, margin: "0 auto", padding: "0 16px" }}>
@@ -605,7 +403,7 @@ function AdminHeader({ section, setSection, onLogout, setPage, alerts }) {
           </div>
         </div>
         <div className="admin-tabs" style={{ display: "flex", gap: 8, overflowX: "auto", padding: "0 0 14px" }}>
-          {ADMIN_SECTIONS.map(item => (
+          {sections.map(item => (
             <button className="admin-tab-button" key={item.id} onClick={() => setSection(item.id)} style={{ padding: "8px 12px", borderRadius: 6, border: "1px solid rgba(255,255,255,.1)", background: section === item.id ? "rgba(255,255,255,.14)" : "rgba(255,255,255,.04)", color: section === item.id ? B.white : "rgba(255,255,255,.65)", cursor: "pointer", fontSize: ".78rem", fontWeight: 700, fontFamily: "inherit", whiteSpace: "nowrap" }}>
               <i className={`ti ${item.icon}`} style={{ marginRight: 6, fontSize: 13 }} aria-hidden="true" />
               {item.label}
@@ -629,7 +427,7 @@ function SidebarBrand() {
   );
 }
 
-function AdminSidebar({ section, setSection, financeView, setFinanceView, alerts, mobileOpen, onClose }) {
+function AdminSidebar({ section, setSection, financeView, setFinanceView, alerts, mobileOpen, onClose, sections = ADMIN_SECTIONS }) {
   const financeSubsections = [
     { id: "overview", label: "Overview" },
     { id: "revenue", label: "Revenue" },
@@ -649,7 +447,7 @@ function AdminSidebar({ section, setSection, financeView, setFinanceView, alerts
               {alerts} jobs need attention
             </div>
           )}
-          {ADMIN_SECTIONS.map(item => {
+          {sections.map(item => {
             const active = section === item.id;
             return (
               <div key={item.id} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -720,10 +518,10 @@ function AdminSidebar({ section, setSection, financeView, setFinanceView, alerts
   );
 }
 
-function AdminTopBar({ section, financeView, onOpenMenu, onLogout, setPage }) {
+function AdminTopBar({ section, financeView, onOpenMenu, onLogout, setPage, sections = ADMIN_SECTIONS }) {
   const title = section === "finance"
     ? `Finance${financeView !== "overview" ? ` / ${financeView[0].toUpperCase()}${financeView.slice(1)}` : ""}`
-    : ADMIN_SECTIONS.find(item => item.id === section)?.label || "Dashboard";
+    : sections.find(item => item.id === section)?.label || "Dashboard";
   return (
     <div className="admin-topbar-shell">
       <div className="admin-topbar">
@@ -841,7 +639,7 @@ function SummaryCards({ tickets, jobs, events, conflicts }) {
   );
 }
 
-function EstimateTicketsSection({ tickets, onSelectTicket, onAcceptTicket, onScheduleTicket, jobs }) {
+function EstimateTicketsSection({ tickets, ticketsLoading = false, ticketsError = "", onSelectTicket, onAcceptTicket, onScheduleTicket, jobs }) {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("All");
   const [decisionFilter, setDecisionFilter] = useState("All");
@@ -893,8 +691,33 @@ function EstimateTicketsSection({ tickets, onSelectTicket, onAcceptTicket, onSch
         </div>
       </Card>
 
+      {ticketsLoading && (
+        <Card style={{ marginBottom: 14 }}>
+          <div style={{ fontSize: ".84rem", color: B.gray, fontWeight: 600 }}>Loading estimate tickets...</div>
+        </Card>
+      )}
+
+      {ticketsError && (
+        <Card style={{ marginBottom: 14, background: "#FFF8E1", borderColor: "#E5D7A7" }}>
+          <div style={{ fontSize: ".84rem", color: "#8A6A12", fontWeight: 700 }}>Unable to load estimate tickets.</div>
+          <div style={{ fontSize: ".78rem", color: B.gray, marginTop: 4 }}>{ticketsError}</div>
+        </Card>
+      )}
+
+      {!ticketsLoading && !ticketsError && tickets.length === 0 && (
+        <Card style={{ marginBottom: 14 }}>
+          <div style={{ fontSize: ".84rem", color: B.gray, fontWeight: 600 }}>No estimate tickets found.</div>
+        </Card>
+      )}
+
+      {!ticketsLoading && !ticketsError && tickets.length > 0 && filtered.length === 0 && (
+        <Card style={{ marginBottom: 14 }}>
+          <div style={{ fontSize: ".84rem", color: B.gray, fontWeight: 600 }}>No estimate tickets match the current filters.</div>
+        </Card>
+      )}
+
       <div className="estimate-ticket-list">
-        {filtered.map(ticket => {
+        {!ticketsLoading && !ticketsError && filtered.map(ticket => {
           const isScheduled = scheduledTicketIds.has(ticket.id);
           const decision = getDecisionCategory(ticket);
           const latestNotification = getLatestNotification(ticket);
@@ -976,19 +799,31 @@ function TicketDetailView({ ticket, onBack, onUpdateTicket, onOpenSchedule, sour
   const [t, setT] = useState({ ...ticket });
   const [note, setNote] = useState("");
   const [saved, setSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
   const decision = getDecisionCategory(t);
   const latestNotification = getLatestNotification(t);
   const showSiteVisitAction = decision === "yes" && !["Site Visit Needed", "Scheduled", "Estimate Accepted", "Ready to Schedule", "Won"].includes(t.status);
   const canScheduleJob = ["Estimate Accepted", "Ready to Schedule"].includes(t.status);
   const canAcceptEstimate = decision === "pending" && !["Estimate Accepted", "Ready to Schedule", "Scheduled", "Won", "Lost", "Declined"].includes(t.status);
 
-  const save = () => {
-    onUpdateTicket(t);
-    setSaved(true);
-    setTimeout(() => {
-      setSaved(false);
-      onBack();
-    }, 350);
+  const save = async () => {
+    setSaving(true);
+    setSaveError("");
+    try {
+      await onUpdateTicket(t);
+      setSaved(true);
+      setTimeout(() => {
+        setSaved(false);
+        onBack();
+      }, 350);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to save estimate changes.";
+      console.error("Unable to save ticket:", error);
+      setSaveError(message);
+    } finally {
+      setSaving(false);
+    }
   };
 
   const changeStatus = status => {
@@ -1016,12 +851,19 @@ function TicketDetailView({ ticket, onBack, onUpdateTicket, onOpenSchedule, sour
           </div>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             {saved && <span style={{ fontSize: ".75rem", color: "#A9DFBF", fontWeight: 600 }}><i className="ti ti-check" style={{ marginRight: 4 }} aria-hidden="true" />Saved</span>}
-            <Btn onClick={save} v="green" sm><i className="ti ti-device-floppy" style={{ marginRight: 5, fontSize: 13, verticalAlign: -2 }} aria-hidden="true" />Save Changes</Btn>
+            <Btn onClick={save} v="green" sm disabled={saving}><i className="ti ti-device-floppy" style={{ marginRight: 5, fontSize: 13, verticalAlign: -2 }} aria-hidden="true" />{saving ? "Saving..." : "Save Changes"}</Btn>
           </div>
         </div>
       </div>
 
       <div style={{ maxWidth: 1100, margin: "0 auto", padding: "20px 16px 60px" }}>
+        {saveError && (
+          <Card style={{ marginBottom: 16, background: "#FFF8E1", borderColor: "#E5D7A7" }}>
+            <div style={{ fontSize: ".82rem", color: "#8A6A12", fontWeight: 700 }}>Estimate changes were not saved.</div>
+            <div style={{ fontSize: ".76rem", color: B.gray, marginTop: 4 }}>{saveError}</div>
+          </Card>
+        )}
+
         <Card style={{ padding: 20, marginBottom: 16 }}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
             <div>
@@ -1187,8 +1029,8 @@ function TicketDetailView({ ticket, onBack, onUpdateTicket, onOpenSchedule, sour
                 {!canAcceptEstimate && !showSiteVisitAction && !canScheduleJob && (
                   <div style={{ fontSize: ".76rem", color: B.gray, lineHeight: 1.5 }}>This lead is best handled through follow-up and status updates before scheduling work.</div>
                 )}
-                <Btn full sm v="outline" onClick={save}>
-                  <i className="ti ti-device-floppy" style={{ marginRight: 5, fontSize: 13 }} aria-hidden="true" />Save Lead Updates
+                <Btn full sm v="outline" onClick={save} disabled={saving}>
+                  <i className="ti ti-device-floppy" style={{ marginRight: 5, fontSize: 13 }} aria-hidden="true" />{saving ? "Saving..." : "Save Lead Updates"}
                 </Btn>
                 {sourceJob && <div style={{ fontSize: ".75rem", color: B.green, fontWeight: 700 }}>This estimate already has a scheduled job.</div>}
               </div>
@@ -1200,12 +1042,12 @@ function TicketDetailView({ ticket, onBack, onUpdateTicket, onOpenSchedule, sour
   );
 }
 
-function CalendarSection({ jobs, crews, builders, onOpenJob, pendingResidentialDraft, onPendingResidentialDraftChange, onSavePendingResidentialSchedule, onCancelPendingResidentialSchedule, pendingBuilderSchedule, onPendingBuilderScheduleChange, onSavePendingBuilderSchedule, onCancelPendingBuilderSchedule }) {
+function CalendarSection({ jobs, crews, builders, onOpenJob, pendingResidentialDraft, onPendingResidentialDraftChange, onSavePendingResidentialSchedule, onCancelPendingResidentialSchedule, pendingBuilderSchedule, onPendingBuilderScheduleChange, onSavePendingBuilderSchedule, onCancelPendingBuilderSchedule, readOnly = false }) {
   const [view, setView] = useState("month");
   const [anchorDate, setAnchorDate] = useState(todayIso());
   const [filters, setFilters] = useState({ crewId: "All", builderId: "All", scheduleType: "All", jobType: "All", status: "All" });
   const events = useMemo(() => buildCalendarEvents(jobs), [jobs]);
-  const schedulingLocked = !!pendingResidentialDraft || !!pendingBuilderSchedule;
+  const schedulingLocked = !readOnly && (!!pendingResidentialDraft || !!pendingBuilderSchedule);
   useEffect(() => {
     const activeDraft = pendingResidentialDraft || pendingBuilderSchedule;
     if (activeDraft?.scheduled_date) {
@@ -1254,6 +1096,7 @@ function CalendarSection({ jobs, crews, builders, onOpenJob, pendingResidentialD
   };
   const pickScheduleDate = iso => {
     setAnchorDate(iso);
+    if (readOnly) return;
     if (pendingResidentialDraft) {
       onPendingResidentialDraftChange({ ...pendingResidentialDraft, scheduled_date: iso });
     }
@@ -1299,6 +1142,13 @@ function CalendarSection({ jobs, crews, builders, onOpenJob, pendingResidentialD
         </div>
       </Card>
 
+      {readOnly && (
+        <Card style={{ marginBottom: 14, background: "#F7F6F0" }}>
+          <div style={{ fontSize: ".82rem", color: B.mid, fontWeight: 700 }}>Field view is read-only.</div>
+          <div style={{ fontSize: ".76rem", color: B.gray, marginTop: 3 }}>Scheduled work details are available, but creating, editing, rescheduling, deleting, and crew assignment controls are disabled for this role.</div>
+        </Card>
+      )}
+
       <div className="calendar-layout" style={{ display: "grid", gridTemplateColumns: schedulingLocked ? "minmax(0,1fr) 320px" : "1fr", gap: 14 }}>
       <Card className="admin-section-card calendar-main-card">
         <div className="calendar-controls" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
@@ -1319,7 +1169,7 @@ function CalendarSection({ jobs, crews, builders, onOpenJob, pendingResidentialD
           <div className="calendar-month-grid" style={{ display: "grid", gridTemplateColumns: "repeat(7,minmax(0,1fr))", gap: 8 }}>
             {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map(day => <div key={day} style={{ fontSize: ".72rem", color: B.gray, fontWeight: 700, textTransform: "uppercase", padding: "0 4px 4px" }}>{day}</div>)}
             {monthDays.map(day => (
-              <div className="calendar-day-card" key={day.iso} onClick={() => pickScheduleDate(day.iso)} style={{ minHeight: 124, border: `1px solid ${(pendingResidentialDraft?.scheduled_date === day.iso || pendingBuilderSchedule?.scheduled_date === day.iso) ? B.bronze : anchorDate === day.iso ? B.green : B.border}`, borderRadius: 8, padding: 8, background: day.inMonth ? B.white : B.sand, cursor: "pointer", boxShadow: (pendingResidentialDraft?.scheduled_date === day.iso || pendingBuilderSchedule?.scheduled_date === day.iso) ? `inset 0 0 0 1px ${B.bronze}` : "none" }}>
+              <div className="calendar-day-card" key={day.iso} onClick={() => pickScheduleDate(day.iso)} style={{ minHeight: 124, border: `1px solid ${(pendingResidentialDraft?.scheduled_date === day.iso || pendingBuilderSchedule?.scheduled_date === day.iso) ? B.bronze : anchorDate === day.iso ? B.green : B.border}`, borderRadius: 8, padding: 8, background: day.inMonth ? B.white : B.sand, cursor: readOnly ? "default" : "pointer", boxShadow: (pendingResidentialDraft?.scheduled_date === day.iso || pendingBuilderSchedule?.scheduled_date === day.iso) ? `inset 0 0 0 1px ${B.bronze}` : "none" }}>
                 <div style={{ fontSize: ".74rem", fontWeight: 700, color: isWeekend(day.iso) ? "#922B21" : B.dark, marginBottom: 8, display: "flex", justifyContent: "space-between" }}>
                   <span>{new Date(`${day.iso}T12:00:00`).getDate()}</span>
                   <span style={{ color: (pendingResidentialDraft?.scheduled_date === day.iso || pendingBuilderSchedule?.scheduled_date === day.iso) ? B.bronze : B.gray }}>{day.events.length > 0 ? day.events.length : (pendingResidentialDraft?.scheduled_date === day.iso || pendingBuilderSchedule?.scheduled_date === day.iso) ? "Pick" : ""}</span>
@@ -1343,7 +1193,7 @@ function CalendarSection({ jobs, crews, builders, onOpenJob, pendingResidentialD
           <div className="calendar-scroll-wrapper">
           <div className="calendar-week-grid" style={{ display: "grid", gridTemplateColumns: "repeat(7,minmax(0,1fr))", gap: 10 }}>
             {weekDays.map(day => (
-              <div className="calendar-day-card" key={day.iso} onClick={() => pickScheduleDate(day.iso)} style={{ border: `1px solid ${(pendingResidentialDraft?.scheduled_date === day.iso || pendingBuilderSchedule?.scheduled_date === day.iso) ? B.bronze : anchorDate === day.iso ? B.green : B.border}`, borderRadius: 8, padding: 10, minHeight: 260, cursor: "pointer" }}>
+              <div className="calendar-day-card" key={day.iso} onClick={() => pickScheduleDate(day.iso)} style={{ border: `1px solid ${(pendingResidentialDraft?.scheduled_date === day.iso || pendingBuilderSchedule?.scheduled_date === day.iso) ? B.bronze : anchorDate === day.iso ? B.green : B.border}`, borderRadius: 8, padding: 10, minHeight: 260, cursor: readOnly ? "default" : "pointer" }}>
                 <div style={{ fontSize: ".76rem", fontWeight: 700, color: isWeekend(day.iso) ? "#922B21" : B.dark, marginBottom: 8 }}>{fmtDateShort(day.iso)}</div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                   {day.events.length === 0 && <div style={{ fontSize: ".72rem", color: B.gray }}>No scheduled work.</div>}
@@ -1383,7 +1233,7 @@ function CalendarSection({ jobs, crews, builders, onOpenJob, pendingResidentialD
           </div>
         )}
       </Card>
-      {pendingResidentialDraft && (
+      {!readOnly && pendingResidentialDraft && (
         <Card className="calendar-side-panel admin-section-card" style={{ alignSelf: "start", position: "sticky", top: 18 }}>
           <div style={{ fontSize: ".82rem", fontWeight: 700, color: B.dark, textTransform: "uppercase", letterSpacing: .5, marginBottom: 10 }}>Schedule Residential Job</div>
           <div style={{ fontSize: ".88rem", fontWeight: 700, color: B.dark, marginBottom: 4 }}>{pendingResidentialDraft.customer_name}</div>
@@ -1433,7 +1283,7 @@ function CalendarSection({ jobs, crews, builders, onOpenJob, pendingResidentialD
           </div>
         </Card>
       )}
-      {pendingBuilderSchedule && (
+      {!readOnly && pendingBuilderSchedule && (
         <Card className="calendar-side-panel admin-section-card" style={{ alignSelf: "start", position: "sticky", top: 18 }}>
           <div style={{ fontSize: ".82rem", fontWeight: 700, color: B.dark, textTransform: "uppercase", letterSpacing: .5, marginBottom: 10 }}>Schedule Builder Job</div>
           <div style={{ fontSize: ".88rem", fontWeight: 700, color: B.dark, marginBottom: 4 }}>{pendingBuilderSchedule.builder_name}</div>
@@ -1465,7 +1315,7 @@ function CalendarSection({ jobs, crews, builders, onOpenJob, pendingResidentialD
   );
 }
 
-function JobsSection({ jobs, onSelectJob, onCreateBuilderJob }) {
+function JobsSection({ jobs, onSelectJob, onCreateBuilderJob, canCreateBuilderJob = true }) {
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState("All");
   const [statusFilter, setStatusFilter] = useState("All");
@@ -1487,7 +1337,7 @@ function JobsSection({ jobs, onSelectJob, onCreateBuilderJob }) {
             <h1 style={{ fontSize: "1.25rem", fontWeight: 700, color: B.dark, marginBottom: 4 }}>Jobs</h1>
             <p style={{ fontSize: ".8rem", color: B.gray }}>Track accepted residential work and builder slab production jobs from scheduling through completion.</p>
           </div>
-          <Btn v="green" onClick={onCreateBuilderJob}><i className="ti ti-plus" style={{ marginRight: 6 }} aria-hidden="true" />New Builder Job</Btn>
+          {canCreateBuilderJob && <Btn v="green" onClick={onCreateBuilderJob}><i className="ti ti-plus" style={{ marginRight: 6 }} aria-hidden="true" />New Builder Job</Btn>}
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 10, marginTop: 12 }}>
           <input style={INP} value={search} onChange={e => setSearch(e.target.value)} placeholder="Search jobs, communities, work orders..." />
@@ -1544,333 +1394,6 @@ function JobsSection({ jobs, onSelectJob, onCreateBuilderJob }) {
   );
 }
 
-function CrewsSection({ crews, jobs, onUpdateCrew, onCreateCrew }) {
-  const [crewDraft, setCrewDraft] = useState(null);
-  const events = useMemo(() => buildCalendarEvents(jobs), [jobs]);
-  const crewSummaries = crews.map(crew => {
-    const todaysEvents = events.filter(event => event.crew_id === crew.id && event.date === todayIso() && event.counts_toward_crew);
-    const todayLoad = todaysEvents.reduce((sum, event) => sum + Number(event.capacity_used || 0), 0);
-    const upcoming = events
-      .filter(event => event.crew_id === crew.id && event.date >= todayIso())
-      .sort((a, b) => `${a.date} ${a.time || "07:00"}`.localeCompare(`${b.date} ${b.time || "07:00"}`))
-      .slice(0, 4);
-    const status = getCrewStatusMeta(todayLoad, crew.dailyCapacity);
-    const progressTone = getCrewProgressTone(todayLoad, crew.dailyCapacity);
-    const capacityPercent = crew.dailyCapacity > 0 ? Math.min((todayLoad / crew.dailyCapacity) * 100, 100) : 100;
-    return { crew, todayLoad, upcoming, status, progressTone, capacityPercent };
-  });
-  const scheduledToday = events.filter(event => event.date === todayIso() && event.counts_toward_crew).length;
-  const overbookedCrews = crewSummaries.filter(item => item.todayLoad > item.crew.dailyCapacity + 0.0001).length;
-  const availableCapacity = crewSummaries.reduce((sum, item) => sum + Math.max(Number(item.crew.dailyCapacity || 0) - item.todayLoad, 0), 0);
-  const openCreateCrew = () => setCrewDraft({ mode: "create", ...buildNewCrewDraft(crews) });
-  const openEditCrew = crew => setCrewDraft({ mode: "edit", ...normalizeCrew(crew) });
-  const closeCrewEditor = () => setCrewDraft(null);
-  const saveCrew = draft => {
-    const normalized = normalizeCrew(draft);
-    if (draft.mode === "create") {
-      onCreateCrew(normalized);
-    } else {
-      onUpdateCrew(normalized.id, normalized);
-    }
-    closeCrewEditor();
-  };
-
-  return (
-    <>
-      <Card style={{ marginBottom: 14 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-          <div>
-            <h1 style={{ fontSize: "1.25rem", fontWeight: 700, color: B.dark, marginBottom: 4 }}>Crews</h1>
-            <p style={{ fontSize: ".8rem", color: B.gray }}>Set daily capacity, review active workload, and catch crew assignments that are overbooked.</p>
-          </div>
-          <Btn v="primary" onClick={openCreateCrew}>
-            <i className="ti ti-plus" style={{ marginRight: 6, fontSize: 13 }} aria-hidden="true" />
-            Add Crew
-          </Btn>
-        </div>
-      </Card>
-      <div className="crews-summary-grid">
-        {[
-          { label: "Total Crews", value: crews.length, helper: "Active field crews" },
-          { label: "Scheduled Today", value: scheduledToday, helper: "Crew assignments on the board" },
-          { label: "Overbooked Crews", value: overbookedCrews, helper: "Need capacity review" },
-          { label: "Available Capacity", value: fmtMetricNumber(availableCapacity), helper: "Days open across crews" },
-        ].map(metric => (
-          <Card key={metric.label} className="crew-metric-card">
-            <div className="crew-metric-label">{metric.label}</div>
-            <div className="crew-metric-value">{metric.value}</div>
-            <div className="crew-metric-helper">{metric.helper}</div>
-          </Card>
-        ))}
-      </div>
-      <div className="crews-grid">
-        {crewSummaries.map(({ crew, todayLoad, upcoming, status, progressTone, capacityPercent }) => (
-          <Card key={crew.id} className="crew-card crew-card--interactive" style={{ cursor: "pointer" }} onClick={() => openEditCrew(crew)}>
-            <div className="crew-card-header">
-              <div>
-                <div className="crew-card-eyebrow">Field Crew</div>
-                <div className="crew-card-title">{crew.name}</div>
-                <div className="crew-card-foreman">Foreman: {crew.foreman}</div>
-              </div>
-              <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 8 }}>
-                <span className={`crew-status-pill crew-status-pill--${status.tone}`}>{status.label}</span>
-                <button
-                  onClick={e => {
-                    e.stopPropagation();
-                    openEditCrew(crew);
-                  }}
-                  className="crew-edit-button"
-                  type="button"
-                >
-                  <i className="ti ti-pencil" style={{ fontSize: 12 }} aria-hidden="true" />
-                  Edit
-                </button>
-              </div>
-            </div>
-            <div className="crew-card-body">
-              <div className="crew-card-notes">{crew.description}</div>
-
-              <div className="crew-workload-panel">
-                <div className="crew-workload-head">
-                  <div>
-                    <div className="crew-section-label">Workload Today</div>
-                    <div className="crew-workload-value">{fmtMetricNumber(todayLoad)} / {fmtMetricNumber(crew.dailyCapacity)} day</div>
-                  </div>
-                  <span className={`crew-load-badge crew-load-badge--${progressTone}`}>
-                    {todayLoad > crew.dailyCapacity + 0.0001 ? "Over capacity" : todayLoad > 0 ? "On schedule" : "Open"}
-                  </span>
-                </div>
-                <div className="crew-progress-track" aria-hidden="true">
-                  <div className={`crew-progress-fill crew-progress-fill--${progressTone}`} style={{ width: `${capacityPercent}%` }} />
-                </div>
-              </div>
-
-              <div className="crew-capacity-panel">
-                <label className="crew-section-label">Daily Capacity</label>
-                <input
-                  className="crew-capacity-input"
-                  style={INP}
-                  type="number"
-                  step="0.25"
-                  value={crew.dailyCapacity}
-                  onClick={e => e.stopPropagation()}
-                  onFocus={e => e.stopPropagation()}
-                  onChange={e => onUpdateCrew(crew.id, { dailyCapacity: Number(e.target.value || 1) })}
-                />
-              </div>
-
-              <div className="crew-section-label" style={{ marginBottom: 8 }}>Upcoming Assignments</div>
-              <div className="crew-assignment-list">
-              {upcoming.length === 0 && (
-                <div className="crew-empty-state">
-                  <i className="ti ti-calendar-off" style={{ fontSize: 18, color: B.lgray }} aria-hidden="true" />
-                  <div>
-                    <div style={{ fontWeight: 700, color: B.mid, marginBottom: 2 }}>No upcoming scheduled work</div>
-                    <div>New assignments will appear here once this crew is placed on the board.</div>
-                  </div>
-                </div>
-              )}
-              {upcoming.map(event => (
-                <div key={event.id} className={`crew-assignment-card crew-assignment-card--${event.schedule_type === "builder_slab" ? "builder" : "residential"}`}>
-                  <div className="crew-assignment-icon">
-                    <i className={`ti ${event.schedule_type === "builder_slab" ? "ti-building-community" : "ti-home"}`} aria-hidden="true" />
-                  </div>
-                  <div className="crew-assignment-content">
-                    <div className="crew-assignment-title">{event.phase_label}</div>
-                    <div className="crew-assignment-meta">{fmtDate(event.date)} - {event.time}</div>
-                    <div className="crew-assignment-detail">{event.schedule_type === "builder_slab" ? `${event.builder_name} - Lot ${event.lot_number}` : event.customer_name}</div>
-                  </div>
-                </div>
-              ))}
-              </div>
-            </div>
-          </Card>
-        ))}
-      </div>
-      {crewDraft && <CrewEditorModal draft={crewDraft} crews={crews} onClose={closeCrewEditor} onSave={saveCrew} />}
-    </>
-  );
-}
-
-function CrewEditorModal({ draft, crews, onClose, onSave }) {
-  const [local, setLocal] = useState(draft);
-  const [error, setError] = useState("");
-  const isCreate = local.mode === "create";
-
-  const updateField = patch => {
-    setLocal(prev => ({ ...prev, ...patch }));
-    if (error) setError("");
-  };
-
-  const submit = () => {
-    const crewNumber = Number(local.crewNumber);
-    const dailyCapacity = Number(local.dailyCapacity);
-    if (!crewNumber) {
-      setError("Crew number is required.");
-      return;
-    }
-    if (!local.name.trim()) {
-      setError("Crew name is required.");
-      return;
-    }
-    if (!local.foreman.trim()) {
-      setError("Foreman name is required.");
-      return;
-    }
-    if (!(dailyCapacity > 0)) {
-      setError("Daily capacity must be greater than 0.");
-      return;
-    }
-    const duplicate = crews.some(crew => crew.id !== local.id && getCrewNumber(crew) === crewNumber);
-    if (duplicate) {
-      setError("Crew numbers must be unique.");
-      return;
-    }
-    onSave({
-      ...local,
-      crewNumber,
-      number: crewNumber,
-      name: local.name.trim(),
-      foreman: local.foreman.trim(),
-      description: local.description.trim(),
-      notes: local.description.trim(),
-      dailyCapacity,
-      phone: local.phone.trim(),
-      status: local.status === "inactive" ? "inactive" : "active",
-    });
-  };
-
-  return (
-    <div className="crew-modal-overlay" onClick={onClose}>
-      <div className="crew-modal-shell" onClick={e => e.stopPropagation()}>
-        <div className="crew-modal-header">
-          <div>
-            <div className="crew-modal-eyebrow">{isCreate ? "Add Crew" : "Edit Crew"}</div>
-            <div className="crew-modal-title">{isCreate ? "Create a new crew" : `Update ${local.name}`}</div>
-          </div>
-          <button onClick={onClose} className="crew-modal-close" type="button" aria-label="Close crew editor">
-            <i className="ti ti-x" aria-hidden="true" />
-          </button>
-        </div>
-        <div className="crew-modal-body">
-          <div className="crew-modal-grid">
-            <div>
-              <label style={labelStyle}>Crew Number</label>
-              <input style={INP} type="number" min="1" value={local.crewNumber} onChange={e => updateField({ crewNumber: e.target.value })} />
-            </div>
-            <div>
-              <label style={labelStyle}>Daily Capacity</label>
-              <input style={INP} type="number" step="0.25" min="0.25" value={local.dailyCapacity} onChange={e => updateField({ dailyCapacity: e.target.value })} />
-            </div>
-            <div>
-              <label style={labelStyle}>Crew Name</label>
-              <input style={INP} type="text" value={local.name} onChange={e => updateField({ name: e.target.value })} />
-            </div>
-            <div>
-              <label style={labelStyle}>Foreman</label>
-              <input style={INP} type="text" value={local.foreman} onChange={e => updateField({ foreman: e.target.value })} />
-            </div>
-            <div>
-              <label style={labelStyle}>Phone</label>
-              <input style={INP} type="text" value={local.phone || ""} onChange={e => updateField({ phone: e.target.value })} placeholder="Optional" />
-            </div>
-            <div>
-              <label style={labelStyle}>Status</label>
-              <select style={{ ...INP, cursor: "pointer" }} value={local.status || "active"} onChange={e => updateField({ status: e.target.value })}>
-                <option value="active">Active</option>
-                <option value="inactive">Inactive</option>
-              </select>
-            </div>
-            <div style={{ gridColumn: "1 / -1" }}>
-              <label style={labelStyle}>Description</label>
-              <textarea style={{ ...INP, minHeight: 110, resize: "vertical" }} value={local.description || ""} onChange={e => updateField({ description: e.target.value })} />
-            </div>
-          </div>
-          {error && <div className="crew-modal-error"><i className="ti ti-alert-circle" style={{ marginRight: 6 }} aria-hidden="true" />{error}</div>}
-          <div className="crew-modal-actions">
-            <Btn v="outline" onClick={onClose}>Cancel</Btn>
-            <Btn v="primary" onClick={submit}>{isCreate ? "Create Crew" : "Save Changes"}</Btn>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function BuildersSection({ builders, jobs, onCreateBuilderJob, onCreateBuilder, onOpenJob }) {
-  const builderSummaries = builders.map(builder => {
-    const builderJobs = jobs.filter(job => job.builder_id === builder.id);
-    const openJobs = builderJobs.filter(job => !["Completed", "Cancelled"].includes(job.status)).length;
-    const nextPour = builderJobs.flatMap(job => sortBuilderPhases(job.phases || [])).find(phase => phase.phase_key === "pour_slab" && phase.scheduled_date);
-    return { builder, builderJobs, openJobs, nextPour };
-  });
-  return (
-    <>
-      <Card style={{ marginBottom: 14 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-          <div>
-            <h1 style={{ fontSize: "1.25rem", fontWeight: 700, color: B.dark, marginBottom: 4 }}>Builders</h1>
-            <p style={{ fontSize: ".8rem", color: B.gray }}>Manage production builder relationships, active communities, and slab workflow volume.</p>
-          </div>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <Btn v="outline" onClick={onCreateBuilder}><i className="ti ti-building-plus" style={{ marginRight: 6 }} aria-hidden="true" />Add Builder</Btn>
-            <Btn v="green" onClick={onCreateBuilderJob}><i className="ti ti-plus" style={{ marginRight: 6 }} aria-hidden="true" />New Builder Job</Btn>
-          </div>
-        </div>
-      </Card>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(300px,1fr))", gap: 12 }}>
-        {builderSummaries.map(({ builder, builderJobs, openJobs, nextPour }) => (
-          <Card key={builder.id}>
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, marginBottom: 10 }}>
-              <div>
-                <div style={{ fontWeight: 700, color: B.dark, fontSize: ".95rem" }}>{builder.name}</div>
-                <div style={{ fontSize: ".74rem", color: B.gray }}>{builder.contact} - {builder.phone}</div>
-              </div>
-              <span style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "6px 10px", borderRadius: 20, background: `${builder.color}14`, color: builder.color, fontWeight: 700, fontSize: ".68rem", whiteSpace: "nowrap" }}>
-                <span style={{ width: 8, height: 8, borderRadius: 999, background: builder.color, display: "inline-block" }} />
-                {openJobs} active
-              </span>
-            </div>
-            <div style={{ fontSize: ".76rem", color: B.gray, marginBottom: 10 }}>Communities: {builder.communities.length ? builder.communities.join(", ") : "None entered yet"}</div>
-            <div style={{ fontSize: ".74rem", color: B.gray, fontWeight: 700, marginBottom: 6 }}>Current jobs</div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 10 }}>
-              {builderJobs.length === 0 && <div style={{ fontSize: ".74rem", color: B.gray }}>No jobs yet.</div>}
-              {builderJobs.map(job => (
-                <button key={job.id} onClick={() => onOpenJob(job.id)} style={{ textAlign: "left", background: B.sand, border: "1px solid var(--color-border-tertiary)", borderRadius: 6, padding: "8px 10px", cursor: "pointer", fontFamily: "inherit" }}>
-                  <div style={{ fontSize: ".76rem", fontWeight: 700, color: B.dark }}>{job.community} - Lot {job.lot_number}</div>
-                  <div style={{ fontSize: ".72rem", color: B.gray }}>{job.work_order_number || "No work order"} - {job.status}</div>
-                </button>
-              ))}
-            </div>
-            <div style={{ fontSize: ".74rem", color: B.gray }}>{nextPour ? `Next pour on ${fmtDate(nextPour.scheduled_date)}` : "No pour scheduled yet."}</div>
-          </Card>
-        ))}
-      </div>
-    </>
-  );
-}
-
-function BuilderRecordModal({ draft, onClose, onSave }) {
-  const [local, setLocal] = useState(draft);
-  return (
-    <Modal title="Add Builder" onClose={onClose} width={640}>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-        <div><label style={labelStyle}>Builder name</label><input style={INP} value={local.name} onChange={e => setLocal(prev => ({ ...prev, name: e.target.value }))} /></div>
-        <div><label style={labelStyle}>Primary contact</label><input style={INP} value={local.contact} onChange={e => setLocal(prev => ({ ...prev, contact: e.target.value }))} /></div>
-        <div><label style={labelStyle}>Phone</label><input style={INP} value={local.phone} onChange={e => setLocal(prev => ({ ...prev, phone: e.target.value }))} /></div>
-        <div style={{ gridColumn: "1 / -1" }}><label style={labelStyle}>Communities</label><input style={INP} value={local.communities} onChange={e => setLocal(prev => ({ ...prev, communities: e.target.value }))} placeholder="Pine Brook, Oak Trace" /></div>
-      </div>
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, marginTop: 16, alignItems: "center", flexWrap: "wrap" }}>
-        <div style={{ fontSize: ".76rem", color: B.gray }}>Enter communities as a comma-separated list.</div>
-        <div style={{ display: "flex", gap: 8 }}>
-          <Btn v="outline" onClick={onClose}>Cancel</Btn>
-          <Btn v="green" onClick={() => onSave(local)} disabled={!local.name.trim()}>Save Builder</Btn>
-        </div>
-      </div>
-    </Modal>
-  );
-}
-
 function SettingsSection({ settings, onUpdateSettings, historyCounts }) {
   return (
     <>
@@ -1920,7 +1443,7 @@ function SettingsSection({ settings, onUpdateSettings, historyCounts }) {
   );
 }
 
-function JobDetailView({ job, crews, onBack, onSaveJob, onOpenPhaseEdit }) {
+function JobDetailView({ job, crews, onBack, onSaveJob, onOpenPhaseEdit, readOnly = false }) {
   const crew = findCrewById(crews, job.crew_id);
   return (
     <div style={{ minHeight: "100vh", background: "#F4F6F3" }}>
@@ -1960,14 +1483,16 @@ function JobDetailView({ job, crews, onBack, onSaveJob, onOpenPhaseEdit }) {
               </div>
               {job.notes && <div style={{ marginTop: 14, fontSize: ".8rem", color: B.mid, lineHeight: 1.6 }}>{job.notes}</div>}
             </Card>
-            <Card>
-              <div style={{ fontSize: ".82rem", fontWeight: 700, color: B.dark, textTransform: "uppercase", letterSpacing: .5, marginBottom: 12 }}>Actions</div>
-              <Btn full v="outline" onClick={() => onOpenPhaseEdit(job.id, null)}><i className="ti ti-calendar-time" style={{ marginRight: 6 }} aria-hidden="true" />Reschedule Job</Btn>
-              <div style={{ height: 10 }} />
-              <Btn full v="green" onClick={() => onSaveJob({ ...job, status: "Completed" })}><i className="ti ti-check" style={{ marginRight: 6 }} aria-hidden="true" />Mark Completed</Btn>
-              <div style={{ height: 10 }} />
-              <Btn full v="outline" onClick={() => onSaveJob({ ...job, status: "Delayed" })}><i className="ti ti-clock-exclamation" style={{ marginRight: 6 }} aria-hidden="true" />Mark Delayed</Btn>
-            </Card>
+            {!readOnly && (
+              <Card>
+                <div style={{ fontSize: ".82rem", fontWeight: 700, color: B.dark, textTransform: "uppercase", letterSpacing: .5, marginBottom: 12 }}>Actions</div>
+                <Btn full v="outline" onClick={() => onOpenPhaseEdit(job.id, null)}><i className="ti ti-calendar-time" style={{ marginRight: 6 }} aria-hidden="true" />Reschedule Job</Btn>
+                <div style={{ height: 10 }} />
+                <Btn full v="green" onClick={() => onSaveJob({ ...job, status: "Completed" })}><i className="ti ti-check" style={{ marginRight: 6 }} aria-hidden="true" />Mark Completed</Btn>
+                <div style={{ height: 10 }} />
+                <Btn full v="outline" onClick={() => onSaveJob({ ...job, status: "Delayed" })}><i className="ti ti-clock-exclamation" style={{ marginRight: 6 }} aria-hidden="true" />Mark Delayed</Btn>
+              </Card>
+            )}
           </div>
         ) : (
           <Card>
@@ -1994,7 +1519,7 @@ function JobDetailView({ job, crews, onBack, onSaveJob, onOpenPhaseEdit }) {
                   </div>
                   <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
                     <Pill status={phase.status} />
-                    <Btn sm v="outline" onClick={() => onOpenPhaseEdit(job.id, phase.id)}>Edit phase</Btn>
+                    {!readOnly && <Btn sm v="outline" onClick={() => onOpenPhaseEdit(job.id, phase.id)}>Edit phase</Btn>}
                   </div>
                 </div>
               ))}
@@ -2236,17 +1761,19 @@ function WarningModal({ state, onClose }) {
   );
 }
 
-const labelStyle = { display: "block", fontSize: ".76rem", fontWeight: 700, color: B.dark, marginBottom: 4 };
 const thStyle = { padding: "8px 10px", borderBottom: "1px solid var(--color-border-tertiary)" };
 const tdStyle = { padding: "10px", borderBottom: "1px solid #F1EEE7", fontSize: ".78rem", color: B.mid };
 
-export default function AdminWorkspace({ tickets, onUpdateTicket, onLogout, setPage }) {
-  const [section, setSection] = useState("dashboard");
+export default function AdminWorkspace({ appRole, tickets, ticketsLoading = false, ticketsError = "", onUpdateTicket, onLogout, setPage }) {
+  const allowedSections = useMemo(() => getAllowedAdminSections(appRole), [appRole]);
+  const defaultSection = getDefaultAdminSection(appRole);
+  const [section, setSection] = useState(defaultSection);
   const [selectedTicketId, setSelectedTicketId] = useState(null);
   const [selectedJobId, setSelectedJobId] = useState(null);
   const [jobs, setJobs] = useState(() => buildDefaultJobs().map(normalizeBuilderJob));
-  const [crews, setCrews] = useState(readStoredCrews);
-  const [builders, setBuilders] = useState(DEFAULT_BUILDERS);
+  const [crews, setCrews] = useState([]);
+  const builderAccessEnabled = hasFullAccess(appRole) || appRole === "office";
+  const { builders, buildersLoading, buildersError, createBuilder, getBuilderCreateError } = useBuilders(builderAccessEnabled);
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
   const [scheduleHistory, setScheduleHistory] = useState([]);
   const [overrideHistory, setOverrideHistory] = useState([]);
@@ -2266,13 +1793,97 @@ export default function AdminWorkspace({ tickets, onUpdateTicket, onLogout, setP
   const selectedJob = jobs.find(job => job.id === selectedJobId) || null;
   const allEvents = useMemo(() => buildCalendarEvents(jobs), [jobs]);
   const activeConflicts = useMemo(() => detectCrewConflicts({ candidateEvents: [], jobs, crews }), [jobs, crews]);
+  const calendarReadOnly = !canManageCalendar(appRole);
+  const canManageSchedule = canManageCalendar(appRole);
 
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    window.localStorage.setItem(CREWS_STORAGE_KEY, JSON.stringify(crews.map(normalizeCrew)));
-  }, [crews]);
+    if (!allowedSections.some(item => item.id === section)) {
+      setSection(defaultSection);
+      setSelectedTicketId(null);
+      setSelectedJobId(null);
+    }
+  }, [allowedSections, defaultSection, section]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadCrews = async () => {
+      const { data, error } = await supabase
+        .from("crews")
+        .select("*");
+
+      if (cancelled) return;
+
+      if (error) {
+        console.error("Unable to load crews:", error);
+        setCrews([]);
+        return;
+      }
+
+      const databaseCrews = (data || [])
+        .map(databaseCrewToAppCrew)
+        .sort((firstCrew, secondCrew) => firstCrew.crewNumber - secondCrew.crewNumber);
+
+      setCrews(databaseCrews);
+    };
+
+    void loadCrews();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const createCrew = async crew => {
+    const { data, error } = await supabase
+      .from("crews")
+      .insert(appCrewToDatabaseCrew(crew))
+      .select("*")
+      .single();
+
+    if (error) {
+      console.error("Unable to create crew:", error);
+      window.alert(`Crew could not be created: ${error.message}`);
+      return false;
+    }
+
+    const savedCrew = databaseCrewToAppCrew(data, crews.length);
+    setCrews(prev => [...prev, savedCrew].sort((a, b) => a.crewNumber - b.crewNumber));
+    return true;
+  };
+
+  const updateCrew = async (crewId, patch) => {
+    const currentCrew = crews.find(crew => crew.id === crewId);
+
+    if (!currentCrew) {
+      console.error("Unable to update crew: crew not found", crewId);
+      return false;
+    }
+
+    const mergedCrew = normalizeCrew({ ...currentCrew, ...patch });
+
+    const { data, error } = await supabase
+      .from("crews")
+      .update(appCrewToDatabaseCrew(mergedCrew))
+      .eq("id", crewId)
+      .select("*")
+      .single();
+
+    if (error) {
+      console.error("Unable to update crew:", error);
+      window.alert(`Crew could not be updated: ${error.message}`);
+      return false;
+    }
+
+    const savedCrew = databaseCrewToAppCrew(data);
+    setCrews(prev => prev
+      .map(crew => crew.id === crewId ? savedCrew : crew)
+      .sort((a, b) => a.crewNumber - b.crewNumber));
+    return true;
+  };
 
   const openBuilderJobModal = () => {
+    if (!canManageSchedule) return;
     if (!builders.length) {
       window.alert("Add a builder first before creating a builder job.");
       return;
@@ -2280,34 +1891,42 @@ export default function AdminWorkspace({ tickets, onUpdateTicket, onLogout, setP
     setBuilderDraft({ builder_id: builders[0]?.id || "", community: "", lot_number: "", job_address: "", work_order_number: "", crew_id: crews[0]?.id || "", notes: "" });
   };
 
-  const createBuilderRecord = draft => {
+  const createBuilderRecord = async draft => {
     const name = draft.name.trim();
     if (!name) return;
     const communities = draft.communities.split(",").map(item => item.trim()).filter(Boolean);
-    const baseSlug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || `${Date.now()}`;
-    let builderId = `builder-${baseSlug}`;
-    if (builders.some(builder => builder.id === builderId)) builderId = `${builderId}-${Date.now().toString().slice(-4)}`;
     const color = BUILDER_COLOR_PALETTE[builders.length % BUILDER_COLOR_PALETTE.length];
-    setBuilders(prev => [...prev, { id: builderId, name, contact: draft.contact.trim(), phone: draft.phone.trim(), communities, color }]);
-    setBuilderRecordDraft(null);
+    const savedBuilder = await createBuilder({ name, contact: draft.contact.trim(), phone: draft.phone.trim(), communities, color, active: true });
+    if (savedBuilder) {
+      setBuilderRecordDraft(null);
+      return;
+    }
+    window.alert(`Builder could not be created: ${getBuilderCreateError() || buildersError || "Unable to create builder."}`);
   };
   const jobsNeedingAttention = jobs.filter(job => job.status === "Delayed" || job.status === "Ready to Schedule").length;
 
-  const updateTicket = updated => {
-    onUpdateTicket(updated);
+  const updateTicket = async updated => {
+    await onUpdateTicket(updated);
     setSelectedTicketId(updated.id);
   };
 
-  const applyTicketStatus = (ticket, status, note) => {
+  const applyTicketStatus = async (ticket, status, note) => {
     const updated = {
       ...ticket,
       status,
       history: [...(ticket.history || []), { s: status, d: new Date().toISOString(), n: note }],
     };
-    onUpdateTicket(updated);
+    try {
+      await onUpdateTicket(updated);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to update estimate status.";
+      console.error("Unable to update estimate status:", error);
+      window.alert(message);
+    }
   };
 
   const openResidentialSchedule = ticket => {
+    if (!canManageSchedule) return;
     setBuilderScheduleDraft(null);
     setResidentialDraft({
       return_section: "tickets",
@@ -2330,6 +1949,7 @@ export default function AdminWorkspace({ tickets, onUpdateTicket, onLogout, setP
   };
 
   const openResidentialReschedule = job => {
+    if (!canManageSchedule) return;
     setBuilderScheduleDraft(null);
     setResidentialDraft({
       job_id: job.id,
@@ -2360,6 +1980,7 @@ export default function AdminWorkspace({ tickets, onUpdateTicket, onLogout, setP
   };
 
   const saveResidentialSchedule = (draft, conflictOverrideReason = "") => {
+    if (!canManageSchedule) return;
     if (!draft.scheduled_date) return;
     if (isSunday(draft.scheduled_date)) {
       blockSundaySchedule("Jobs");
@@ -2441,7 +2062,7 @@ export default function AdminWorkspace({ tickets, onUpdateTicket, onLogout, setP
     setJobs(prev => [job, ...prev]);
     const source = tickets.find(ticket => ticket.id === draft.estimateTicketId);
     if (source) {
-      applyTicketStatus({ ...source }, "Scheduled", `Converted to scheduled residential job${job.work_order_number ? ` (${job.work_order_number})` : ""}.`);
+      void applyTicketStatus({ ...source }, "Scheduled", `Converted to scheduled residential job${job.work_order_number ? ` (${job.work_order_number})` : ""}.`);
     }
     setScheduleHistory(prev => [{ id: `sch-${Date.now()}`, type: "residential", jobId: job.id, note: `Scheduled ${job.customer_name} for ${job.scheduled_date}` }, ...prev]);
     if (conflictOverrideReason) {
@@ -2473,6 +2094,7 @@ export default function AdminWorkspace({ tickets, onUpdateTicket, onLogout, setP
   };
 
   const saveBuilderSchedule = draft => {
+    if (!canManageSchedule) return;
     if (!draft.scheduled_date) return;
     if (isSunday(draft.scheduled_date)) {
       blockSundaySchedule("Builder jobs");
@@ -2537,6 +2159,7 @@ export default function AdminWorkspace({ tickets, onUpdateTicket, onLogout, setP
   };
 
   const openPhaseEdit = (jobId, phaseId) => {
+    if (!canManageSchedule) return;
     const job = jobs.find(item => item.id === jobId);
     if (!job) return;
     if (job.schedule_type === "residential") {
@@ -2554,6 +2177,7 @@ export default function AdminWorkspace({ tickets, onUpdateTicket, onLogout, setP
   };
 
   const saveResidentialReschedule = (draft, overrideReason = "") => {
+    if (!canManageSchedule) return;
     setJobs(prev => prev.map(job => {
       if (job.id !== draft.job_id) return job;
       const updated = {
@@ -2588,6 +2212,7 @@ export default function AdminWorkspace({ tickets, onUpdateTicket, onLogout, setP
   };
 
   const saveBuilderPhase = (draft, overrideReason = "") => {
+    if (!canManageSchedule) return;
     const job = jobs.find(item => item.id === draft.job_id);
     if (!job) return;
     const sortedPhases = sortBuilderPhases(job.phases || []);
@@ -2682,6 +2307,7 @@ export default function AdminWorkspace({ tickets, onUpdateTicket, onLogout, setP
   };
 
   const applyPushPreview = (overrideReason = "") => {
+    if (!canManageSchedule) return;
     if (!pushPreview) return;
     if (pushPreview.conflicts.length && !overrideReason) {
       setConflictState({
@@ -2715,14 +2341,14 @@ export default function AdminWorkspace({ tickets, onUpdateTicket, onLogout, setP
       return <TicketDetailView ticket={selectedTicket} onBack={() => setSelectedTicketId(null)} onUpdateTicket={updateTicket} onOpenSchedule={openResidentialSchedule} sourceJob={sourceJob} />;
     }
     if (selectedJob) {
-      return <JobDetailView job={selectedJob} crews={crews} onBack={() => setSelectedJobId(null)} onSaveJob={job => setJobs(prev => prev.map(item => item.id === job.id ? job : item))} onOpenPhaseEdit={openPhaseEdit} />;
+      return <JobDetailView job={selectedJob} crews={crews} onBack={() => setSelectedJobId(null)} onSaveJob={job => { if (canManageSchedule) setJobs(prev => prev.map(item => item.id === job.id ? job : item)); }} onOpenPhaseEdit={openPhaseEdit} readOnly={calendarReadOnly} />;
     }
     if (section === "dashboard") return <DashboardHomeSection tickets={tickets} jobs={jobs} events={allEvents} conflicts={activeConflicts} setSection={setSection} />;
-    if (section === "tickets") return <EstimateTicketsSection tickets={tickets} onSelectTicket={ticket => setSelectedTicketId(ticket.id)} onAcceptTicket={ticket => applyTicketStatus(ticket, "Estimate Accepted", "Estimate accepted and ready for office scheduling.")} onScheduleTicket={openResidentialSchedule} jobs={jobs} />;
-    if (section === "calendar") return <CalendarSection jobs={jobs} crews={crews} builders={builders} onOpenJob={jobId => setSelectedJobId(jobId)} pendingResidentialDraft={residentialDraft} onPendingResidentialDraftChange={setResidentialDraft} onSavePendingResidentialSchedule={saveResidentialSchedule} onCancelPendingResidentialSchedule={() => setResidentialDraft(null)} pendingBuilderSchedule={builderScheduleDraft} onPendingBuilderScheduleChange={setBuilderScheduleDraft} onSavePendingBuilderSchedule={saveBuilderSchedule} onCancelPendingBuilderSchedule={() => setBuilderScheduleDraft(null)} />;
-    if (section === "jobs") return <JobsSection jobs={jobs} onSelectJob={jobId => setSelectedJobId(jobId)} onCreateBuilderJob={openBuilderJobModal} />;
-    if (section === "crews") return <CrewsSection crews={crews} jobs={jobs} onCreateCrew={crew => setCrews(prev => [...prev, normalizeCrew(crew)])} onUpdateCrew={(crewId, patch) => setCrews(prev => prev.map(crew => crew.id === crewId ? normalizeCrew({ ...crew, ...patch }) : crew))} />;
-    if (section === "builders") return <BuildersSection builders={builders} jobs={jobs} onCreateBuilderJob={openBuilderJobModal} onCreateBuilder={() => setBuilderRecordDraft({ name: "", contact: "", phone: "", communities: "" })} onOpenJob={jobId => setSelectedJobId(jobId)} />;
+    if (section === "tickets") return <EstimateTicketsSection tickets={tickets} ticketsLoading={ticketsLoading} ticketsError={ticketsError} onSelectTicket={ticket => setSelectedTicketId(ticket.id)} onAcceptTicket={ticket => applyTicketStatus(ticket, "Estimate Accepted", "Estimate accepted and ready for office scheduling.")} onScheduleTicket={openResidentialSchedule} jobs={jobs} />;
+    if (section === "calendar") return <CalendarSection jobs={jobs} crews={crews} builders={builders} onOpenJob={jobId => setSelectedJobId(jobId)} pendingResidentialDraft={canManageSchedule ? residentialDraft : null} onPendingResidentialDraftChange={setResidentialDraft} onSavePendingResidentialSchedule={saveResidentialSchedule} onCancelPendingResidentialSchedule={() => setResidentialDraft(null)} pendingBuilderSchedule={canManageSchedule ? builderScheduleDraft : null} onPendingBuilderScheduleChange={setBuilderScheduleDraft} onSavePendingBuilderSchedule={saveBuilderSchedule} onCancelPendingBuilderSchedule={() => setBuilderScheduleDraft(null)} readOnly={calendarReadOnly} />;
+    if (section === "jobs") return <JobsSection jobs={jobs} onSelectJob={jobId => setSelectedJobId(jobId)} onCreateBuilderJob={openBuilderJobModal} canCreateBuilderJob={canManageSchedule} />;
+    if (section === "crews") return <CrewsSection crews={crews} jobs={jobs} onCreateCrew={createCrew} onUpdateCrew={updateCrew} />;
+    if (section === "builders") return <BuildersSection builders={builders} buildersLoading={buildersLoading} buildersError={buildersError} jobs={jobs} onCreateBuilderJob={openBuilderJobModal} onCreateBuilder={() => setBuilderRecordDraft({ name: "", contact: "", phone: "", communities: "" })} onOpenJob={jobId => setSelectedJobId(jobId)} />;
     if (section === "finance") return <FinanceDashboard financeView={financeView} onFinanceViewChange={setFinanceView} />;
     return <SettingsSection settings={settings} onUpdateSettings={patch => setSettings(prev => ({ ...prev, ...patch }))} historyCounts={{ scheduleChanges: scheduleHistory.length, overrides: overrideHistory.length }} />;
   })();
@@ -2742,6 +2368,7 @@ export default function AdminWorkspace({ tickets, onUpdateTicket, onLogout, setP
             alerts={jobsNeedingAttention}
             mobileOpen={mobileNavOpen}
             onClose={() => setMobileNavOpen(false)}
+            sections={allowedSections}
           />
           <div className="admin-main-shell">
             <AdminTopBar
@@ -2750,6 +2377,7 @@ export default function AdminWorkspace({ tickets, onUpdateTicket, onLogout, setP
               onOpenMenu={() => setMobileNavOpen(true)}
               onLogout={onLogout}
               setPage={setPage}
+              sections={allowedSections}
             />
             <div className="admin-content-shell" style={{ padding: "22px 16px 60px" }}>
               {content}
@@ -2759,11 +2387,11 @@ export default function AdminWorkspace({ tickets, onUpdateTicket, onLogout, setP
       )}
       {(selectedTicket || selectedJob) && content}
 
-      {builderDraft && <BuilderJobModal draft={builderDraft} crews={crews} builders={builders} onClose={() => setBuilderDraft(null)} onSave={createBuilderJob} />}
-      {builderRecordDraft && <BuilderRecordModal draft={builderRecordDraft} onClose={() => setBuilderRecordDraft(null)} onSave={createBuilderRecord} />}
-      {phaseDraft && <PhaseEditModal draft={phaseDraft} crews={crews} onClose={() => setPhaseDraft(null)} onSave={phaseDraft.isResidential ? saveResidentialReschedule : saveBuilderPhase} isResidential={phaseDraft.isResidential} />}
-      {pushPreview && <PushSummaryModal preview={pushPreview} onClose={() => setPushPreview(null)} onConfirm={() => applyPushPreview("")} />}
-      {weekendOverrideState && (
+      {canManageSchedule && builderDraft && <BuilderJobModal draft={builderDraft} crews={crews} builders={builders} onClose={() => setBuilderDraft(null)} onSave={createBuilderJob} />}
+      {hasFullAccess(appRole) && builderRecordDraft && <BuilderRecordModal draft={builderRecordDraft} onClose={() => setBuilderRecordDraft(null)} onSave={createBuilderRecord} />}
+      {canManageSchedule && phaseDraft && <PhaseEditModal draft={phaseDraft} crews={crews} onClose={() => setPhaseDraft(null)} onSave={phaseDraft.isResidential ? saveResidentialReschedule : saveBuilderPhase} isResidential={phaseDraft.isResidential} />}
+      {canManageSchedule && pushPreview && <PushSummaryModal preview={pushPreview} onClose={() => setPushPreview(null)} onConfirm={() => applyPushPreview("")} />}
+      {canManageSchedule && weekendOverrideState && (
         <WeekendOverrideModal
           state={weekendOverrideState}
           crews={crews}
@@ -2773,7 +2401,7 @@ export default function AdminWorkspace({ tickets, onUpdateTicket, onLogout, setP
         />
       )}
       {warningState && <WarningModal state={warningState} onClose={() => setWarningState(null)} />}
-      {conflictState && (
+      {canManageSchedule && conflictState && (
         <ConflictModal
           state={conflictState}
           crews={crews}

@@ -199,15 +199,35 @@ export default function App() {
             minHeight: "100vh",
             background: "#F0F2F5",
             display: "flex",
+            flexDirection: "column",
             alignItems: "center",
             justifyContent: "center",
             color: B.dark,
             fontWeight: 600,
             padding: 16,
             textAlign: "center",
+            gap: 16,
           }}
         >
-          {roleError || "This account does not have access to the dashboard."}
+          <div>
+            {roleError || "This account does not have access to the dashboard."}
+          </div>
+
+          <button
+            onClick={() => void handleLogout()}
+            style={{
+              border: "none",
+              borderRadius: 999,
+              background: B.dark,
+              color: "#FFFFFF",
+              padding: "10px 18px",
+              fontSize: "0.95rem",
+              fontWeight: 600,
+              cursor: "pointer",
+            }}
+          >
+            Sign out
+          </button>
         </div>
       );
     }

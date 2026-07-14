@@ -1,4 +1,4 @@
-import { BUILDER_COLOR_PALETTE, BUILDER_PHASES, sortBuilderPhases } from "../builders/builderUtils";
+import { BUILDER_COLOR_PALETTE, BUILDER_PHASES, BUILDER_SLAB_WORKFLOW, sortBuilderPhases } from "../builders/builderUtils";
 import type {
   CalendarEvent,
   CalendarUiStatus,
@@ -79,6 +79,23 @@ function isBuilderStep(step: string | null | undefined) {
   return !!step && step !== "residential_job";
 }
 
+export function toUiBuilderPhaseKey(builderStep: string | null | undefined) {
+  if (!builderStep) {
+    return "";
+  }
+
+  return builderStep === "slab_prep" ? "prep_slab" : builderStep;
+}
+
+export function toDatabaseBuilderStep(phaseKey: string | null | undefined) {
+  if (!phaseKey) {
+    return null;
+  }
+
+  const normalizedPhaseKey = phaseKey.trim().toLowerCase();
+  return normalizedPhaseKey === "prep_slab" ? "slab_prep" : normalizedPhaseKey;
+}
+
 export function databaseStatusToCalendarStatus(status: string | null | undefined): CalendarUiStatus {
   switch (status) {
     case "scheduled":
@@ -118,19 +135,23 @@ export function getScheduleTypeFromRow(row: DatabaseScheduleEventRow): ScheduleT
 }
 
 export function getSchedulePhaseLabel(builderStep: string | null | undefined) {
-  if (!builderStep) {
+  const normalizedBuilderStep = toUiBuilderPhaseKey(builderStep);
+
+  if (!normalizedBuilderStep) {
     return "Scheduled Work";
   }
 
-  return BUILDER_PHASE_METADATA.get(builderStep)?.label || humanizeStep(builderStep);
+  return BUILDER_PHASE_METADATA.get(normalizedBuilderStep)?.label || humanizeStep(normalizedBuilderStep);
 }
 
 export function getResponsibleParty(builderStep: string | null | undefined) {
-  if (!builderStep) {
+  const normalizedBuilderStep = toUiBuilderPhaseKey(builderStep);
+
+  if (!normalizedBuilderStep) {
     return "Southern Oak Concrete";
   }
 
-  return BUILDER_PHASE_METADATA.get(builderStep)?.responsible_party || "Southern Oak Concrete";
+  return BUILDER_PHASE_METADATA.get(normalizedBuilderStep)?.responsible_party || "Southern Oak Concrete";
 }
 
 export function getCountsTowardCrew(builderStep: string | null | undefined, crewId: string | null | undefined) {
@@ -138,11 +159,13 @@ export function getCountsTowardCrew(builderStep: string | null | undefined, crew
     return false;
   }
 
-  if (!builderStep) {
+  const normalizedBuilderStep = toUiBuilderPhaseKey(builderStep);
+
+  if (!normalizedBuilderStep) {
     return true;
   }
 
-  return BUILDER_PHASE_METADATA.get(builderStep)?.counts_toward_crew ?? true;
+  return BUILDER_PHASE_METADATA.get(normalizedBuilderStep)?.counts_toward_crew ?? true;
 }
 
 function getBuilderColor(builderName: string) {
@@ -198,9 +221,11 @@ export function databaseScheduleRowToCalendarEvent(row: DatabaseScheduleEventRow
     builder_name: builderName,
     job_type: row.job?.job_type || "",
     address: formatAddress(row),
-    community: "",
-    lot_number: "",
-    work_order_number: row.work_order_number || "",
+    community: row.job?.community || "",
+    lot_number: row.job?.lot_number || "",
+    work_order_number: scheduleType === "residential"
+      ? (row.job?.purchase_order_number || row.work_order_number || "")
+      : (row.work_order_number || ""),
     date: row.scheduled_date,
     time: normalizeTimeValue(row.start_time),
     end_time: row.end_time ? row.end_time.slice(0, 5) : "",
@@ -228,8 +253,8 @@ function buildResidentialCalendarJob(row: DatabaseScheduleEventRow): ScheduleCal
     customer_name: customerName,
     builder_name: "",
     builder_color: RESIDENTIAL_EVENT_COLOR,
-    community: "",
-    lot_number: "",
+    community: row.job?.community || "",
+    lot_number: row.job?.lot_number || "",
     job_type: row.job?.job_type || "",
     job_address: formatAddress(row),
     scheduled_date: row.scheduled_date,
@@ -237,38 +262,83 @@ function buildResidentialCalendarJob(row: DatabaseScheduleEventRow): ScheduleCal
     estimated_duration: 1,
     day_capacity_used: 1,
     crew_id: row.crew_id || "",
-    work_order_number: row.work_order_number || "",
+    work_order_number: row.job?.purchase_order_number || row.work_order_number || "",
     status: databaseStatusToCalendarStatus(row.status),
     notes: row.notes || row.job?.notes || "",
+    last_reschedule_reason: row.last_reschedule_reason || "",
+    last_rescheduled_at: row.last_rescheduled_at || "",
+    last_rescheduled_by: row.last_rescheduled_by || "",
     phases: [],
   };
 }
 
+function buildBuilderPlaceholderPhase(jobId: string, workflowPhase: typeof BUILDER_SLAB_WORKFLOW[number]): ScheduleCalendarPhase {
+  return {
+    id: `${jobId}:${workflowPhase.uiKey}:placeholder`,
+    databaseId: "",
+    phase_key: workflowPhase.uiKey,
+    phase_label: workflowPhase.label,
+    responsible_party: workflowPhase.responsible_party,
+    counts_toward_crew: workflowPhase.counts_toward_crew,
+    scheduled_date: "",
+    scheduled_time: "",
+    end_time: "",
+    crew_id: "",
+    work_order_number: "",
+    day_capacity_used: 0,
+    estimated_duration: 1,
+    status: "Ready to Schedule",
+    notes: "",
+    last_reschedule_reason: "",
+    last_rescheduled_at: "",
+    last_rescheduled_by: "",
+  };
+}
+
 function buildBuilderPhase(row: DatabaseScheduleEventRow): ScheduleCalendarPhase {
+  const phaseKey = toUiBuilderPhaseKey(row.builder_step) || "other";
+
   return {
     id: row.id,
     databaseId: row.id,
-    phase_key: row.builder_step || "other",
-    phase_label: getSchedulePhaseLabel(row.builder_step),
-    responsible_party: getResponsibleParty(row.builder_step),
-    counts_toward_crew: getCountsTowardCrew(row.builder_step, row.crew_id),
+    scheduleEventDatabaseId: row.id,
+    phase_key: phaseKey,
+    phase_label: getSchedulePhaseLabel(phaseKey),
+    responsible_party: getResponsibleParty(phaseKey),
+    counts_toward_crew: getCountsTowardCrew(phaseKey, row.crew_id),
     scheduled_date: row.scheduled_date,
     scheduled_time: normalizeTimeValue(row.start_time),
+    end_time: row.end_time ? row.end_time.slice(0, 5) : "",
     crew_id: row.crew_id || "",
     work_order_number: row.work_order_number || "",
-    day_capacity_used: getCountsTowardCrew(row.builder_step, row.crew_id) ? 1 : 0,
+    day_capacity_used: getCountsTowardCrew(phaseKey, row.crew_id) ? 1 : 0,
     estimated_duration: 1,
     status: databaseStatusToCalendarStatus(row.status),
     notes: row.notes || "",
+    last_reschedule_reason: row.last_reschedule_reason || "",
+    last_rescheduled_at: row.last_rescheduled_at || "",
+    last_rescheduled_by: row.last_rescheduled_by || "",
   };
 }
 
 function buildBuilderCalendarJob(rows: DatabaseScheduleEventRow[]): ScheduleCalendarJob {
   const sortedRows = sortScheduleRows(rows);
   const firstRow = sortedRows[0];
-  const phases = sortBuilderPhases(sortedRows.map(buildBuilderPhase));
+  const persistedPhases = sortBuilderPhases(sortedRows.map(buildBuilderPhase));
+  const persistedPhaseMap = new Map(
+    persistedPhases.map((phase) => [toUiBuilderPhaseKey(phase.phase_key) || phase.phase_key, phase])
+  );
+  const standardPhases = BUILDER_SLAB_WORKFLOW.map((workflowPhase) =>
+    persistedPhaseMap.get(workflowPhase.uiKey) || buildBuilderPlaceholderPhase(firstRow.job_id, workflowPhase)
+  );
+  const extraPhases = persistedPhases.filter((phase) =>
+    !BUILDER_SLAB_WORKFLOW.some((workflowPhase) => workflowPhase.uiKey === (toUiBuilderPhaseKey(phase.phase_key) || phase.phase_key))
+  );
+  const phases = sortBuilderPhases([...standardPhases, ...extraPhases]);
   const builderName = getBuilderName(firstRow);
-  const nextPhase = phases.find((phase) => !["Completed", "Cancelled"].includes(phase.status)) || phases[0];
+  const nextPhase = phases.find((phase) => phase.scheduled_date && !["Completed", "Cancelled"].includes(phase.status))
+    || phases.find((phase) => phase.scheduled_date)
+    || phases[0];
 
   return {
     id: firstRow.job_id,
@@ -280,8 +350,8 @@ function buildBuilderCalendarJob(rows: DatabaseScheduleEventRow[]): ScheduleCale
     customer_name: "",
     builder_name: builderName,
     builder_color: getBuilderColor(builderName),
-    community: "",
-    lot_number: "",
+    community: firstRow.job?.community || "",
+    lot_number: firstRow.job?.lot_number || "",
     job_type: firstRow.job?.job_type || "",
     job_address: formatAddress(firstRow),
     scheduled_date: nextPhase?.scheduled_date || firstRow.scheduled_date,
@@ -289,9 +359,12 @@ function buildBuilderCalendarJob(rows: DatabaseScheduleEventRow[]): ScheduleCale
     estimated_duration: phases.length || 1,
     day_capacity_used: nextPhase?.day_capacity_used || 1,
     crew_id: nextPhase?.crew_id || firstRow.crew_id || "",
-    work_order_number: firstRow.work_order_number || "",
+    work_order_number: nextPhase?.work_order_number || "",
     status: nextPhase?.status || databaseStatusToCalendarStatus(firstRow.status),
     notes: firstRow.notes || firstRow.job?.notes || "",
+    last_reschedule_reason: nextPhase?.last_reschedule_reason || "",
+    last_rescheduled_at: nextPhase?.last_rescheduled_at || "",
+    last_rescheduled_by: nextPhase?.last_rescheduled_by || "",
     phases,
   };
 }

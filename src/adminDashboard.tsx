@@ -5,9 +5,10 @@ import FinanceDashboard from "./adminFinanceDashboard";
 import { supabase } from "./lib/supabase";
 import BuildersSection from "./features/admin/builders/BuildersSection";
 import BuilderRecordModal from "./features/admin/builders/BuilderRecordModal";
-import { BUILDER_COLOR_PALETTE, BUILDER_PHASES, sortBuilderPhases } from "./features/admin/builders/builderUtils";
+import { BUILDER_COLOR_PALETTE, BUILDER_PHASES, BUILDER_SLAB_WORKFLOW, sortBuilderPhases } from "./features/admin/builders/builderUtils";
 import { canAccessFinance, canAccessEstimates, canManageCalendar, canViewCalendar, hasFullAccess } from "./features/admin/auth/roles";
-import { calendarStatusToDatabaseStatus } from "./features/admin/calendar/calendarUtils";
+import { fetchProfileDisplayNames } from "./features/admin/calendar/calendarService";
+import { calendarStatusToDatabaseStatus, databaseStatusToCalendarStatus, toDatabaseBuilderStep, toUiBuilderPhaseKey } from "./features/admin/calendar/calendarUtils";
 import CrewsSection from "./features/admin/crews/CrewsSection";
 import { appCrewToDatabaseCrew, databaseCrewToAppCrew, normalizeCrew } from "./features/admin/crews/crewMappers";
 import { buildBuilderEvents, buildCalendarEvents, buildResidentialEvents, findCrewById, getCrewNumber } from "./features/admin/crews/crewUtils";
@@ -120,6 +121,40 @@ const RESPONSIBLE_PARTIES = [
   "Inspector",
   "Other",
 ];
+const STANDARD_RESCHEDULE_REASONS = [
+  "Weather Delay",
+  "Crew Availability",
+  "Customer Request",
+  "Builder Request",
+  "Material Delay",
+  "Site Not Ready",
+  "Inspection / Permit",
+  "Other",
+];
+const parseRescheduleReasonDraft = reason => {
+  const normalizedReason = String(reason || "").trim();
+  if (!normalizedReason) {
+    return { preset: "", custom: "" };
+  }
+
+  const matchedReason = STANDARD_RESCHEDULE_REASONS.find(option => option.toLowerCase() === normalizedReason.toLowerCase());
+  if (matchedReason) {
+    return { preset: matchedReason, custom: "" };
+  }
+
+  return { preset: "Other", custom: normalizedReason };
+};
+const buildRescheduleReasonValue = (preset, custom = "") => {
+  if (!preset) {
+    return "";
+  }
+
+  if (preset === "Other") {
+    return String(custom || "").trim();
+  }
+
+  return preset;
+};
 
 const SCHEMA_TABLES = [
   "estimates",
@@ -177,6 +212,28 @@ const firstWorkingDate = dateStr => {
   let result = dateStr;
   while (isWeekend(result)) result = plusDays(result, 1);
   return result;
+};
+const recalculateWorkflowPhaseDates = (phases, startIndex = 0) => {
+  const nextPhases = phases.map(phase => ({ ...phase }));
+
+  for (let idx = Math.max(1, startIndex + 1); idx < nextPhases.length; idx += 1) {
+    if (nextPhases[idx].manual_date_override) {
+      continue;
+    }
+
+    const previousPhase = nextPhases[idx - 1];
+    const workingDaysAfterPrevious = BUILDER_SLAB_WORKFLOW[idx]?.workingDaysAfterPrevious ?? 0;
+    nextPhases[idx].scheduled_date = previousPhase?.scheduled_date
+      ? nextWorkingDate(previousPhase.scheduled_date, workingDaysAfterPrevious)
+      : "";
+  }
+
+  return nextPhases;
+};
+const formatDateTime = value => {
+  if (!value) return "-";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 };
 const suggestResidentialDuration = ticket => {
   if ((ticket.sqft || 0) >= 1800) return 2;
@@ -1543,9 +1600,15 @@ function SettingsSection({ settings, onUpdateSettings, historyCounts }) {
   );
 }
 
-function JobDetailView({ job, crews, onBack, onSaveJob, onOpenPhaseEdit, readOnly = false }) {
+function JobDetailView({ job, crews, onBack, onSaveJob, onOpenPhaseEdit, onOpenPhaseDetails, readOnly = false, latestRescheduleReasons = {}, profileDisplayNames = {} }) {
   const crew = findCrewById(crews, job.crew_id);
   const builderHeading = [job.builder_name, job.community, job.lot_number ? `Lot ${job.lot_number}` : ""].filter(Boolean).join(" - ") || job.name || "Builder Job";
+  const residentialLastRescheduleReason = job.scheduleEventDatabaseId
+    ? (job.last_reschedule_reason || latestRescheduleReasons[job.scheduleEventDatabaseId] || "")
+    : "";
+  const residentialLastRescheduledBy = job.last_rescheduled_by
+    ? (String(profileDisplayNames[job.last_rescheduled_by] || "").trim() || "Unknown user")
+    : "";
   return (
     <div style={{ minHeight: "100vh", background: "#F4F6F3" }}>
       <div style={{ background: B.dark, padding: "0 16px" }}>
@@ -1564,7 +1627,7 @@ function JobDetailView({ job, crews, onBack, onSaveJob, onOpenPhaseEdit, readOnl
               <div style={{ fontSize: ".82rem", color: B.gray }}>{job.job_address}</div>
             </div>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-              <span style={{ fontSize: ".78rem", color: B.gray }}>Work order {job.work_order_number || "-"}</span>
+              {job.schedule_type === "residential" && <span style={{ fontSize: ".78rem", color: B.gray }}>Work order {job.work_order_number || "-"}</span>}
               {crew && <span style={{ fontSize: ".78rem", color: B.gray }}>Crew {getCrewNumber(crew)}</span>}
             </div>
           </div>
@@ -1582,12 +1645,15 @@ function JobDetailView({ job, crews, onBack, onSaveJob, onOpenPhaseEdit, readOnl
                   </div>
                 ))}
               </div>
+              {residentialLastRescheduleReason && <div style={{ marginTop: 12, fontSize: ".74rem", color: B.gray }}>Last reschedule reason: {residentialLastRescheduleReason}</div>}
+              {residentialLastRescheduledBy && <div style={{ marginTop: 6, fontSize: ".74rem", color: B.gray }}>Last rescheduled by: {residentialLastRescheduledBy}</div>}
+              {job.last_rescheduled_at && <div style={{ marginTop: 6, fontSize: ".74rem", color: B.gray }}>Last rescheduled at: {formatDateTime(job.last_rescheduled_at)}</div>}
               {job.notes && <div style={{ marginTop: 14, fontSize: ".8rem", color: B.mid, lineHeight: 1.6 }}>{job.notes}</div>}
             </Card>
             {!readOnly && (
               <Card>
                 <div style={{ fontSize: ".82rem", fontWeight: 700, color: B.dark, textTransform: "uppercase", letterSpacing: .5, marginBottom: 12 }}>Actions</div>
-                <Btn full v="outline" onClick={() => onOpenPhaseEdit(job.id, null)}><i className="ti ti-calendar-time" style={{ marginRight: 6 }} aria-hidden="true" />Reschedule Job</Btn>
+                <Btn full v="outline" onClick={() => onOpenPhaseEdit(job.id, null)}><i className="ti ti-calendar-time" style={{ marginRight: 6 }} aria-hidden="true" />{job.scheduleEventDatabaseId ? "Reschedule Job" : "Schedule Job"}</Btn>
                 <div style={{ height: 10 }} />
                 <Btn full v="green" onClick={() => onSaveJob({ ...job, status: "Completed" })}><i className="ti ti-check" style={{ marginRight: 6 }} aria-hidden="true" />Mark Completed</Btn>
                 <div style={{ height: 10 }} />
@@ -1617,10 +1683,21 @@ function JobDetailView({ job, crews, onBack, onSaveJob, onOpenPhaseEdit, readOnl
                         {phase.crew_id && ` - ${fmtCap(phase.day_capacity_used)}`}
                       </div>
                     </div>
+                    <div>
+                      <div style={{ fontSize: ".7rem", color: B.gray, marginBottom: 2 }}>Work order</div>
+                      <div style={{ fontSize: ".8rem", color: B.dark }}>{phase.work_order_number || "-"}</div>
+                    </div>
+                    {(phase.last_reschedule_reason || latestRescheduleReasons[phase.scheduleEventDatabaseId]) && (
+                      <div>
+                        <div style={{ fontSize: ".7rem", color: B.gray, marginBottom: 2 }}>Last reschedule reason</div>
+                        <div style={{ fontSize: ".8rem", color: B.dark }}>{phase.last_reschedule_reason || latestRescheduleReasons[phase.scheduleEventDatabaseId]}</div>
+                      </div>
+                    )}
                   </div>
                   <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
                     <Pill status={phase.status} />
-                    {!readOnly && <Btn sm v="outline" onClick={() => onOpenPhaseEdit(job.id, phase.id)}>Edit phase</Btn>}
+                    <Btn sm v="outline" onClick={() => onOpenPhaseDetails(job.id, phase.id)}>View Details</Btn>
+                    {!readOnly && <Btn sm v="outline" onClick={() => onOpenPhaseEdit(job.id, phase.id)}>{phase.scheduleEventDatabaseId ? "Edit Phase" : "Schedule Phase"}</Btn>}
                   </div>
                 </div>
               ))}
@@ -1634,6 +1711,7 @@ function JobDetailView({ job, crews, onBack, onSaveJob, onOpenPhaseEdit, readOnl
 
 function ResidentialScheduleModal({ draft, crews, onClose, onSave }) {
   const [local, setLocal] = useState(draft);
+  const existingReason = String(local.last_reschedule_reason || "").trim();
   return (
     <Modal title="Convert to Scheduled Job" onClose={onClose}>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
@@ -1656,6 +1734,13 @@ function ResidentialScheduleModal({ draft, crews, onClose, onSave }) {
             {JOB_STATUSES.map(status => <option key={status} value={status}>{status}</option>)}
           </select>
         </div>
+        {!!local.scheduleEventDatabaseId && (
+          <RescheduleReasonInput
+            value={local.reschedule_reason || ""}
+            onChange={nextReason => setLocal(prev => ({ ...prev, reschedule_reason: nextReason }))}
+            helperText={existingReason ? `Required only when changing the scheduled date or time. Last saved reschedule reason: ${existingReason}` : "Required only when changing the scheduled date or time."}
+          />
+        )}
         <div style={{ gridColumn: "1 / -1" }}><label style={labelStyle}>Notes</label><textarea style={{ ...INP, minHeight: 96 }} value={local.notes} onChange={e => setLocal(prev => ({ ...prev, notes: e.target.value }))} /></div>
       </div>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 10, marginTop: 16, alignItems: "center", flexWrap: "wrap" }}>
@@ -1690,8 +1775,53 @@ function BuilderJobModal({ draft, crews, builders, onClose, onSave }) {
   );
 }
 
+function RescheduleReasonInput({ value, onChange, helperText = "", required = false }) {
+  const initialState = parseRescheduleReasonDraft(value);
+  const [preset, setPreset] = useState(initialState.preset);
+  const [customReason, setCustomReason] = useState(initialState.custom);
+
+  useEffect(() => {
+    const nextState = parseRescheduleReasonDraft(value);
+    setPreset(nextState.preset);
+    setCustomReason(nextState.custom);
+  }, [value]);
+
+  return (
+    <div style={{ gridColumn: "1 / -1" }}>
+      <label style={labelStyle}>Reason for rescheduling</label>
+      <select
+        style={{ ...INP, cursor: "pointer" }}
+        value={preset}
+        onChange={e => {
+          const nextPreset = e.target.value;
+          setPreset(nextPreset);
+          onChange(buildRescheduleReasonValue(nextPreset, customReason));
+        }}
+      >
+        <option value="">{required ? "Select a required reason" : "No reason selected"}</option>
+        {STANDARD_RESCHEDULE_REASONS.map(reason => <option key={reason} value={reason}>{reason}</option>)}
+      </select>
+      {preset === "Other" && (
+        <textarea
+          style={{ ...INP, minHeight: 90, marginTop: 10 }}
+          maxLength={500}
+          value={customReason}
+          onChange={e => {
+            const nextCustomReason = e.target.value;
+            setCustomReason(nextCustomReason);
+            onChange(buildRescheduleReasonValue("Other", nextCustomReason));
+          }}
+          placeholder="Enter the reschedule reason."
+        />
+      )}
+      {helperText && <div style={{ fontSize: ".72rem", color: B.gray, marginTop: 4 }}>{helperText}</div>}
+    </div>
+  );
+}
+
 function PhaseEditModal({ draft, crews, onClose, onSave, isResidential }) {
   const [local, setLocal] = useState(draft);
+  const existingReason = String(local.last_reschedule_reason || "").trim();
   return (
     <Modal title={isResidential ? "Reschedule Residential Job" : `Edit ${draft.phase_label}`} onClose={onClose}>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
@@ -1701,10 +1831,20 @@ function PhaseEditModal({ draft, crews, onClose, onSave, isResidential }) {
         <div><label style={labelStyle}>Status</label><select style={{ ...INP, cursor: "pointer" }} value={local.status} onChange={e => setLocal(prev => ({ ...prev, status: e.target.value }))}>{JOB_STATUSES.map(status => <option key={status} value={status}>{status}</option>)}</select></div>
         <div><label style={labelStyle}>Day capacity used</label><input style={INP} type="number" step="0.25" value={local.day_capacity_used} onChange={e => setLocal(prev => ({ ...prev, day_capacity_used: Number(e.target.value || 0) }))} /></div>
         <div><label style={labelStyle}>Responsible party</label><input disabled style={{ ...INP, background: "#F5F5F3" }} value={local.responsible_party || "Southern Oak Concrete"} /></div>
+        {!!local.scheduleEventDatabaseId && (
+          <RescheduleReasonInput
+            value={local.reschedule_reason || ""}
+            onChange={nextReason => setLocal(prev => ({ ...prev, reschedule_reason: nextReason }))}
+            helperText="A fresh reason is required only when this update changes the scheduled date or time."
+          />
+        )}
         <div style={{ gridColumn: "1 / -1" }}><label style={labelStyle}>Notes</label><textarea style={{ ...INP, minHeight: 90 }} value={local.notes || ""} onChange={e => setLocal(prev => ({ ...prev, notes: e.target.value }))} /></div>
       </div>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 10, marginTop: 16, flexWrap: "wrap", alignItems: "center" }}>
-        {!isResidential && <div style={{ fontSize: ".76rem", color: B.gray }}>If this phase is pushed later, following phases will move forward automatically and skip weekends.</div>}
+        <div style={{ fontSize: ".76rem", color: B.gray }}>
+          {!isResidential ? "If this phase is pushed later, following phases will move forward automatically and skip weekends." : ""}
+          {existingReason ? `${!isResidential ? " " : ""}Last saved reschedule reason: ${existingReason}` : ""}
+        </div>
         <div style={{ display: "flex", gap: 8, marginLeft: "auto" }}>
           <Btn v="outline" onClick={onClose}>Cancel</Btn>
           <Btn v="green" onClick={() => onSave(local)}>Save Schedule</Btn>
@@ -1714,11 +1854,181 @@ function PhaseEditModal({ draft, crews, onClose, onSave, isResidential }) {
   );
 }
 
+function BuilderWorkflowScheduleModal({ draft, crews, onClose, onSave }) {
+  const [local, setLocal] = useState(draft);
+
+  useEffect(() => {
+    setLocal(draft);
+  }, [draft]);
+
+  const updatePhase = (index, patch, options = {}) => {
+    setLocal(prev => {
+      const nextPhases = (prev.phases || []).map((phase, phaseIndex) =>
+        phaseIndex === index
+          ? { ...phase, ...patch }
+          : phase
+      );
+
+      const recalculatedPhases = options.recalculate
+        ? recalculateWorkflowPhaseDates(nextPhases, index)
+        : nextPhases;
+
+      return {
+        ...prev,
+        phases: recalculatedPhases,
+      };
+    });
+  };
+
+  return (
+    <Modal title="Confirm Builder Workflow Schedule" onClose={onClose} width={920}>
+      <div style={{ fontSize: ".82rem", color: B.gray, marginBottom: 14 }}>
+        Form Slab uses the selected date. Prep Slab defaults one working day later, and Pour Slab defaults one working day after Prep Slab.
+      </div>
+      <div style={{ fontSize: ".92rem", fontWeight: 700, color: B.dark }}>{local.builder_name || "Builder Job"}</div>
+      <div style={{ fontSize: ".78rem", color: B.gray, marginBottom: 16 }}>
+        {[local.community, local.lot_number ? `Lot ${local.lot_number}` : "", local.job_address].filter(Boolean).join(" · ") || "Builder slab workflow"}
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        {(local.phases || []).map((phase, index) => (
+          <div key={phase.id} style={{ border: `1px solid ${B.border}`, borderRadius: 10, padding: 14, background: B.white }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center", marginBottom: 10 }}>
+              <div>
+                <div style={{ fontSize: ".92rem", fontWeight: 700, color: B.dark }}>{index + 1}. {phase.phase_label}</div>
+                <div style={{ fontSize: ".74rem", color: B.gray }}>{phase.responsible_party}</div>
+              </div>
+              <div style={{ fontSize: ".74rem", color: B.gray }}>
+                {phase.scheduleEventDatabaseId ? `Saved ${phase.work_order_number || ""}` : "Not yet saved"}
+              </div>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))", gap: 12 }}>
+              <div>
+                <label style={labelStyle}>Scheduled date</label>
+                <input
+                  style={INP}
+                  type="date"
+                  value={phase.scheduled_date || ""}
+                  onChange={e => updatePhase(index, { scheduled_date: e.target.value, manual_date_override: index > 0 }, { recalculate: true })}
+                />
+              </div>
+              <div>
+                <label style={labelStyle}>Start time</label>
+                <input
+                  style={INP}
+                  type="time"
+                  value={phase.scheduled_time || ""}
+                  onChange={e => updatePhase(index, { scheduled_time: e.target.value })}
+                />
+              </div>
+              <div>
+                <label style={labelStyle}>Crew</label>
+                <select
+                  style={{ ...INP, cursor: "pointer" }}
+                  value={phase.crew_id || ""}
+                  onChange={e => updatePhase(index, { crew_id: e.target.value })}
+                >
+                  {crews.map(crew => <option key={crew.id} value={crew.id}>{crew.name}</option>)}
+                </select>
+              </div>
+              <div>
+                <label style={labelStyle}>Status</label>
+                <select
+                  style={{ ...INP, cursor: "pointer" }}
+                  value={phase.status || "Scheduled"}
+                  onChange={e => updatePhase(index, { status: e.target.value })}
+                >
+                  {JOB_STATUSES.map(status => <option key={status} value={status}>{status}</option>)}
+                </select>
+              </div>
+            </div>
+            <div style={{ marginTop: 12 }}>
+              <label style={labelStyle}>Notes</label>
+              <textarea
+                style={{ ...INP, minHeight: 84 }}
+                value={phase.notes || ""}
+                onChange={e => updatePhase(index, { notes: e.target.value })}
+              />
+            </div>
+          </div>
+        ))}
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, marginTop: 16, alignItems: "center", flexWrap: "wrap" }}>
+        <div style={{ fontSize: ".76rem", color: B.gray }}>Dates recalculate only for later phases that you have not manually overridden.</div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <Btn v="outline" onClick={onClose}>Cancel</Btn>
+          <Btn v="green" onClick={() => onSave(local)}>Save All Phases</Btn>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function BuilderPhaseDetailsModal({ detail, crews, profileDisplayNames = {}, onClose, onSchedule, onEdit, onReschedule }) {
+  const crew = findCrewById(crews, detail.phase.crew_id);
+  const lastRescheduledBy = detail.phase.last_rescheduled_by
+    ? (String(profileDisplayNames[detail.phase.last_rescheduled_by] || "").trim() || "Unknown user")
+    : "-";
+  const values = [
+    ["Phase", detail.phase.phase_label],
+    ["Work order", detail.phase.work_order_number || "-"],
+    ["Builder", detail.builder_name || "-"],
+    ["Community", detail.community || "-"],
+    ["Lot number", detail.lot_number || "-"],
+    ["Scheduled date", detail.phase.scheduled_date ? fmtDate(detail.phase.scheduled_date) : "-"],
+    ["Start time", detail.phase.scheduled_time || "-"],
+    ["End time", detail.phase.end_time || "-"],
+    ["Crew", crew ? crew.name : "-"],
+    ["Status", detail.phase.status || "-"],
+    ["Latest reschedule reason", detail.phase.last_reschedule_reason || "-"],
+    ["Last rescheduled at", formatDateTime(detail.phase.last_rescheduled_at)],
+    ["Last rescheduled by", lastRescheduledBy],
+  ];
+
+  return (
+    <Modal title={detail.phase.phase_label} onClose={onClose} width={720}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 12 }}>
+        {values.map(([label, value]) => (
+          <div key={label}>
+            <div style={{ fontSize: ".72rem", color: B.gray, marginBottom: 2 }}>{label}</div>
+            <div style={{ fontSize: ".85rem", color: B.dark, fontWeight: 700 }}>{value}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{ marginTop: 14 }}>
+        <div style={{ fontSize: ".72rem", color: B.gray, marginBottom: 4 }}>Notes</div>
+        <div style={{ fontSize: ".84rem", color: B.mid, lineHeight: 1.6 }}>{detail.phase.notes || "-"}</div>
+      </div>
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 18, flexWrap: "wrap" }}>
+        {!detail.phase.scheduleEventDatabaseId && <Btn v="green" onClick={onSchedule}>Schedule Phase</Btn>}
+        {!!detail.phase.scheduleEventDatabaseId && <Btn v="outline" onClick={onEdit}>Edit Phase</Btn>}
+        {!!detail.phase.scheduleEventDatabaseId && <Btn v="green" onClick={onReschedule}>Reschedule Phase</Btn>}
+      </div>
+    </Modal>
+  );
+}
+
 function PushSummaryModal({ preview, onClose, onConfirm }) {
+  const [rescheduleReason, setRescheduleReason] = useState(preview.reschedule_reason || "");
+  const requiresRescheduleReason = !!preview.requiresRescheduleReason;
+  const conflictCount = preview.summary.filter(item => item.conflict).length;
   return (
     <Modal title="Confirm Builder Schedule Push" onClose={onClose} width={860}>
-      <div style={{ fontSize: ".8rem", color: B.gray, marginBottom: 12 }}>Following phases will be shifted forward in order. Saturdays and Sundays are skipped automatically.</div>
-      <div style={{ overflowX: "auto" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 10, marginBottom: 16 }}>
+        <Card style={{ padding: 14, background: B.white }}>
+          <div style={{ fontSize: ".72rem", color: B.gray, textTransform: "uppercase", letterSpacing: .5, marginBottom: 4 }}>Phases affected</div>
+          <div style={{ fontSize: "1.2rem", fontWeight: 700, color: B.dark }}>{preview.summary.length}</div>
+        </Card>
+        <Card style={{ padding: 14, background: conflictCount ? "#FFF6F4" : "#F5FBF6", borderColor: conflictCount ? "#F0C1B8" : "#CFE5D2" }}>
+          <div style={{ fontSize: ".72rem", color: B.gray, textTransform: "uppercase", letterSpacing: .5, marginBottom: 4 }}>Conflicts</div>
+          <div style={{ fontSize: "1.2rem", fontWeight: 700, color: conflictCount ? "#922B21" : B.green }}>{conflictCount}</div>
+        </Card>
+        <Card style={{ padding: 14, background: B.white }}>
+          <div style={{ fontSize: ".72rem", color: B.gray, textTransform: "uppercase", letterSpacing: .5, marginBottom: 4 }}>Weekend rule</div>
+          <div style={{ fontSize: ".88rem", fontWeight: 700, color: B.dark }}>Saturdays and Sundays are skipped</div>
+        </Card>
+      </div>
+      <div style={{ fontSize: ".8rem", color: B.gray, marginBottom: 12 }}>Review the proposed date changes below before saving the push-forward update.</div>
+      <div style={{ overflowX: "auto", border: `1px solid ${B.border}`, borderRadius: 10, background: B.white, padding: 6 }}>
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <thead>
             <tr style={{ textAlign: "left", fontSize: ".72rem", color: B.gray }}>
@@ -1744,9 +2054,20 @@ function PushSummaryModal({ preview, onClose, onConfirm }) {
           </tbody>
         </table>
       </div>
+      {requiresRescheduleReason && (
+        <Card style={{ marginTop: 16, padding: 16, background: "#FFF8F2", borderColor: "#E7C89A" }}>
+          <div style={{ fontSize: ".8rem", fontWeight: 700, color: B.dark, marginBottom: 8 }}>Reschedule Reason Required</div>
+          <div style={{ fontSize: ".76rem", color: B.gray, marginBottom: 10 }}>One or more existing scheduled phases are moving, so this push-forward update needs a standardized reason.</div>
+          <RescheduleReasonInput
+            value={rescheduleReason}
+            onChange={setRescheduleReason}
+            required
+          />
+        </Card>
+      )}
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 }}>
         <Btn v="outline" onClick={onClose}>Cancel</Btn>
-        <Btn v="green" onClick={onConfirm}>Apply Schedule Push</Btn>
+        <Btn v="green" onClick={() => onConfirm(rescheduleReason)}>Apply Schedule Push</Btn>
       </div>
     </Modal>
   );
@@ -1895,6 +2216,7 @@ export default function AdminWorkspace({ appRole, tickets, ticketsLoading = fals
     calendarJobs,
     loading: scheduleLoading,
     error: scheduleError,
+    refreshScheduleEvents,
     createEvent: createScheduleEvent,
     updateEvent: updateScheduleEvent,
     findJobIdByEstimateId,
@@ -1902,11 +2224,15 @@ export default function AdminWorkspace({ appRole, tickets, ticketsLoading = fals
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
   const [scheduleHistory, setScheduleHistory] = useState([]);
   const [overrideHistory, setOverrideHistory] = useState([]);
+  const [latestRescheduleReasons, setLatestRescheduleReasons] = useState({});
+  const [profileDisplayNames, setProfileDisplayNames] = useState({});
   const [residentialDraft, setResidentialDraft] = useState(null);
   const [builderScheduleDraft, setBuilderScheduleDraft] = useState(null);
+  const [builderWorkflowDraft, setBuilderWorkflowDraft] = useState(null);
   const [builderDraft, setBuilderDraft] = useState(null);
   const [builderRecordDraft, setBuilderRecordDraft] = useState(null);
   const [phaseDraft, setPhaseDraft] = useState(null);
+  const [phaseDetailState, setPhaseDetailState] = useState(null);
   const [pushPreview, setPushPreview] = useState(null);
   const [conflictState, setConflictState] = useState(null);
   const [weekendOverrideState, setWeekendOverrideState] = useState(null);
@@ -1915,15 +2241,66 @@ export default function AdminWorkspace({ appRole, tickets, ticketsLoading = fals
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   const selectedTicket = tickets.find(ticket => ticket.id === selectedTicketId) || null;
-  const selectedJob = jobs.find(job => job.id === selectedJobId) || null;
+  const findLoadedResidentialScheduleRow = jobDatabaseId => {
+    if (!jobDatabaseId) return null;
+    return scheduleRows.find(row => row.job_id === jobDatabaseId && row.builder_step === "residential_job") || null;
+  };
+  const resolveResidentialScheduleRow = (jobDatabaseId, scheduleEventDatabaseId = "") => {
+    if (!jobDatabaseId) return null;
+    if (scheduleEventDatabaseId) {
+      const matchedById = scheduleRows.find(row => row.id === scheduleEventDatabaseId && row.job_id === jobDatabaseId && row.builder_step === "residential_job");
+      if (matchedById) {
+        return matchedById;
+      }
+    }
+    return findLoadedResidentialScheduleRow(jobDatabaseId);
+  };
+  const hydrateResidentialJob = job => {
+    if (!job || job.schedule_type !== "residential") {
+      return job;
+    }
+
+    const resolvedScheduleRow = resolveResidentialScheduleRow(job.databaseId || "", job.scheduleEventDatabaseId || "");
+    if (!resolvedScheduleRow) {
+      return job;
+    }
+
+    return {
+      ...job,
+      scheduleEventDatabaseId: job.scheduleEventDatabaseId || resolvedScheduleRow.id,
+      scheduled_date: resolvedScheduleRow.scheduled_date || job.scheduled_date,
+      scheduled_time: resolvedScheduleRow.start_time ? resolvedScheduleRow.start_time.slice(0, 5) : (job.scheduled_time || ""),
+      crew_id: resolvedScheduleRow.crew_id || job.crew_id,
+      status: databaseStatusToCalendarStatus(resolvedScheduleRow.status),
+      notes: resolvedScheduleRow.notes || job.notes,
+      last_reschedule_reason: resolvedScheduleRow.last_reschedule_reason || job.last_reschedule_reason || "",
+    };
+  };
+  const getResidentialScheduleEventId = (jobDatabaseId, scheduleEventDatabaseId = "") =>
+    scheduleEventDatabaseId || resolveResidentialScheduleRow(jobDatabaseId, scheduleEventDatabaseId)?.id || "";
+  const isResidentialScheduleUniqueViolation = error => {
+    const summary = error?.supabaseError;
+    const text = `${summary?.message || ""} ${summary?.details || ""} ${summary?.hint || ""}`.toLowerCase();
+    return summary?.code === "23505" && text.includes("schedule_events_residential_job_unique_idx");
+  };
+  const selectedJob = hydrateResidentialJob(jobs.find(job => job.id === selectedJobId) || null);
   const selectedCalendarJob = calendarJobs.find(job => job.id === selectedCalendarJobId) || null;
   const allEvents = useMemo(() => buildCalendarEvents(jobs), [jobs]);
   const activeConflicts = useMemo(() => detectCrewConflicts({ candidateEvents: [], jobs, crews }), [jobs, crews]);
   const calendarReadOnly = !canManageCalendar(appRole);
   const canManageSchedule = canManageCalendar(appRole);
+  const canResolveProfileDisplayNames = hasFullAccess(appRole) || appRole === "office";
   const scheduledEstimateDatabaseIds = useMemo(
     () => new Set(calendarJobs.map(job => job.estimate_database_id).filter(Boolean)),
     [calendarJobs]
+  );
+  const rescheduledByUserIds = useMemo(
+    () => Array.from(new Set(
+      scheduleRows
+        .map(row => row.last_rescheduled_by)
+        .filter(value => typeof value === "string" && value.trim())
+    )),
+    [scheduleRows]
   );
 
   useEffect(() => {
@@ -1955,6 +2332,40 @@ export default function AdminWorkspace({ appRole, tickets, ticketsLoading = fals
     refreshJobs,
     scheduleRows.map(row => `${row.id}:${row.updated_at || row.created_at}`).join("|"),
   ]);
+
+  useEffect(() => {
+    if (!canResolveProfileDisplayNames || rescheduledByUserIds.length === 0) {
+      setProfileDisplayNames({});
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadProfileDisplayNames = async () => {
+      try {
+        const rows = await fetchProfileDisplayNames(rescheduledByUserIds);
+        if (cancelled) return;
+
+        const nextMap = rows.reduce((accumulator, row) => ({
+          ...accumulator,
+          [row.id]: row.full_name,
+        }), {});
+
+        setProfileDisplayNames(nextMap);
+      } catch (error) {
+        console.error("Unable to load profile display names:", error);
+        if (!cancelled) {
+          setProfileDisplayNames({});
+        }
+      }
+    };
+
+    void loadProfileDisplayNames();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [canResolveProfileDisplayNames, rescheduledByUserIds]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2087,6 +2498,74 @@ export default function AdminWorkspace({ appRole, tickets, ticketsLoading = fals
   };
 
   const findCalendarJob = jobId => calendarJobs.find(job => job.id === jobId) || null;
+  const getScheduleEventDatabaseId = phase => phase?.scheduleEventDatabaseId || phase?.databaseId || "";
+  const getBuilderJobSource = (jobId, jobDatabaseId = "") =>
+    findCalendarJob(jobId)
+    || jobs.find(item => item.id === jobId || item.databaseId === jobId || (jobDatabaseId && item.databaseId === jobDatabaseId))
+    || null;
+  const resolveLoadedBuilderPhaseScheduleEventId = (jobId, jobDatabaseId, phaseKey) => {
+    const normalizedPhaseKey = toUiBuilderPhaseKey(phaseKey);
+    if (!normalizedPhaseKey) {
+      return "";
+    }
+
+    const source = getBuilderJobSource(jobId, jobDatabaseId);
+    if (!source) {
+      return "";
+    }
+
+    const matchingPhase = (source.phases || []).find(phase => toUiBuilderPhaseKey(phase.phase_key) === normalizedPhaseKey);
+    return getScheduleEventDatabaseId(matchingPhase);
+  };
+  const createInitialBuilderWorkflowDraft = (sourceJob, draft, jobDatabaseId) => {
+    const sourcePhases = sortBuilderPhases((sourceJob.phases || []).map(phase => ({
+      ...phase,
+      phase_key: toUiBuilderPhaseKey(phase.phase_key) || phase.phase_key,
+      scheduleEventDatabaseId: getScheduleEventDatabaseId(phase),
+    })));
+    let cursor = draft.scheduled_date || "";
+
+    return {
+      job_id: sourceJob.id,
+      job_database_id: jobDatabaseId,
+      builder_name: sourceJob.builder_name || "",
+      community: sourceJob.community || "",
+      lot_number: sourceJob.lot_number || "",
+      job_address: sourceJob.job_address || "",
+      phases: BUILDER_SLAB_WORKFLOW.map((workflowPhase, index) => {
+        const existingPhase = sourcePhases.find(phase => phase.phase_key === workflowPhase.uiKey) || null;
+        const scheduled_date = index === 0
+          ? (draft.scheduled_date || existingPhase?.scheduled_date || "")
+          : (cursor ? nextWorkingDate(cursor, workflowPhase.workingDaysAfterPrevious) : "");
+        cursor = scheduled_date || cursor;
+
+        return {
+          id: existingPhase?.id || `${sourceJob.id}:${workflowPhase.uiKey}:workflow`,
+          databaseId: existingPhase?.databaseId || "",
+          scheduleEventDatabaseId: existingPhase?.scheduleEventDatabaseId || resolveLoadedBuilderPhaseScheduleEventId(sourceJob.id, jobDatabaseId, workflowPhase.uiKey),
+          phase_key: workflowPhase.uiKey,
+          phase_label: workflowPhase.label,
+          responsible_party: workflowPhase.responsible_party,
+          counts_toward_crew: workflowPhase.counts_toward_crew,
+          scheduled_date,
+          scheduled_time: existingPhase?.scheduled_time || draft.scheduled_time || (workflowPhase.uiKey === "pour_slab" ? "06:30" : "07:00"),
+          end_time: existingPhase?.end_time || "",
+          crew_id: existingPhase?.crew_id || draft.crew_id || crews[0]?.id || "",
+          work_order_number: existingPhase?.work_order_number || "",
+          day_capacity_used: existingPhase?.day_capacity_used || (workflowPhase.counts_toward_crew ? 1 : 0),
+          estimated_duration: existingPhase?.estimated_duration || 1,
+          status: existingPhase?.status || draft.status || "Scheduled",
+          notes: existingPhase?.notes || (index === 0 ? draft.notes || "" : ""),
+          last_reschedule_reason: existingPhase?.last_reschedule_reason || "",
+          last_rescheduled_at: existingPhase?.last_rescheduled_at || "",
+          last_rescheduled_by: existingPhase?.last_rescheduled_by || "",
+          manual_date_override: false,
+        };
+      }),
+      weekend_override: !!draft.weekend_override,
+      charge_weekend_fee: !!draft.charge_weekend_fee,
+    };
+  };
 
   const openResidentialSchedule = ticket => {
     if (!canManageSchedule) return;
@@ -2134,6 +2613,7 @@ export default function AdminWorkspace({ appRole, tickets, ticketsLoading = fals
       work_order_number: job.work_order_number || "",
       status: job.status || "Scheduled",
       notes: job.notes || "",
+      last_reschedule_reason: job.last_reschedule_reason || "",
       charge_weekend_fee: !!job.charge_weekend_fee,
     });
     setSelectedJobId(null);
@@ -2144,24 +2624,28 @@ export default function AdminWorkspace({ appRole, tickets, ticketsLoading = fals
   const openResidentialRescheduleFromJob = job => {
     if (!canManageSchedule) return;
     setBuilderScheduleDraft(null);
+    const jobDatabaseId = job.databaseId || "";
+    const resolvedScheduleRow = resolveResidentialScheduleRow(jobDatabaseId, job.scheduleEventDatabaseId || "");
+    const resolvedScheduleEventId = getResidentialScheduleEventId(jobDatabaseId, job.scheduleEventDatabaseId || "");
     setResidentialDraft({
       job_id: job.id,
-      job_database_id: job.databaseId || "",
-      scheduleEventDatabaseId: job.scheduleEventDatabaseId || "",
-      return_section: job.scheduleEventDatabaseId ? "calendar" : "jobs",
+      job_database_id: jobDatabaseId,
+      scheduleEventDatabaseId: resolvedScheduleEventId,
+      return_section: resolvedScheduleEventId ? "calendar" : "jobs",
       customer_name: job.customer_name,
       estimateTicketId: job.sourceTicketId || "",
       estimateDatabaseId: job.estimate_database_id || "",
       job_type: job.job_type,
       job_address: job.job_address,
-      scheduled_date: job.scheduled_date || firstWorkingDate(plusDays(todayIso(), 1)),
-      scheduled_time: job.scheduled_time || "07:00",
+      scheduled_date: resolvedScheduleRow?.scheduled_date || job.scheduled_date || firstWorkingDate(plusDays(todayIso(), 1)),
+      scheduled_time: resolvedScheduleRow?.start_time?.slice(0, 5) || job.scheduled_time || "07:00",
       estimated_duration: job.estimated_duration || 1,
       day_capacity_used: job.day_capacity_used || 1,
-      crew_id: job.crew_id || crews[0]?.id || "",
+      crew_id: resolvedScheduleRow?.crew_id || job.crew_id || crews[0]?.id || "",
       work_order_number: job.work_order_number || "",
-      status: job.status || "Scheduled",
-      notes: job.notes || "",
+      status: resolvedScheduleRow ? databaseStatusToCalendarStatus(resolvedScheduleRow.status) : (job.status || "Ready to Schedule"),
+      notes: resolvedScheduleRow?.notes || job.notes || "",
+      last_reschedule_reason: resolvedScheduleRow?.last_reschedule_reason || job.last_reschedule_reason || "",
       charge_weekend_fee: !!job.charge_weekend_fee,
     });
     setSelectedJobId(null);
@@ -2176,9 +2660,37 @@ export default function AdminWorkspace({ appRole, tickets, ticketsLoading = fals
     });
   };
 
+  const normalizeScheduleTimeValue = value => String(value || "").slice(0, 5);
+  const scheduleTimingChanged = (originalDate, originalStartTime, originalEndTime, nextDate, nextStartTime, nextEndTime) =>
+    (originalDate || "") !== (nextDate || "")
+    || normalizeScheduleTimeValue(originalStartTime) !== normalizeScheduleTimeValue(nextStartTime)
+    || normalizeScheduleTimeValue(originalEndTime) !== normalizeScheduleTimeValue(nextEndTime);
+  const rememberLatestRescheduleReason = (scheduleEventDatabaseId, reason) => {
+    const normalizedReason = String(reason || "").trim();
+    if (!scheduleEventDatabaseId || !normalizedReason) {
+      return;
+    }
+
+    setLatestRescheduleReasons(prev => ({
+      ...prev,
+      [scheduleEventDatabaseId]: normalizedReason,
+    }));
+  };
+  const validateRescheduleReasonLength = reason => {
+    if (String(reason || "").trim().length > 500) {
+      window.alert("Reschedule reasons must be 500 characters or fewer.");
+      return false;
+    }
+
+    return true;
+  };
+
   const saveResidentialSchedule = async (draft, conflictOverrideReason = "") => {
     if (!canManageSchedule) return;
     if (!draft.scheduled_date) return;
+    if (!validateRescheduleReasonLength(draft.reschedule_reason)) return;
+    let resolvedJobId = draft.job_database_id || "";
+    let resolvedScheduleEventDatabaseId = getResidentialScheduleEventId(resolvedJobId, draft.scheduleEventDatabaseId || "");
     if (isSunday(draft.scheduled_date)) {
       blockSundaySchedule("Jobs");
       return;
@@ -2214,8 +2726,8 @@ export default function AdminWorkspace({ appRole, tickets, ticketsLoading = fals
       notes: draft.notes,
     };
     const candidateEvents = buildResidentialEvents(calendarUpdated);
-    const existingCalendarEvents = draft.scheduleEventDatabaseId
-      ? scheduleEvents.filter(event => event.databaseId !== draft.scheduleEventDatabaseId)
+    const existingCalendarEvents = resolvedScheduleEventDatabaseId
+      ? scheduleEvents.filter(event => event.databaseId !== resolvedScheduleEventDatabaseId)
       : scheduleEvents;
     const conflicts = detectCrewConflicts({
       candidateEvents,
@@ -2235,22 +2747,41 @@ export default function AdminWorkspace({ appRole, tickets, ticketsLoading = fals
       return;
     }
 
-    if (draft.scheduleEventDatabaseId) {
+    if (resolvedScheduleEventDatabaseId) {
+      const existingScheduleRow = resolveResidentialScheduleRow(resolvedJobId, resolvedScheduleEventDatabaseId);
+      const requiresRescheduleReason = existingScheduleRow && scheduleTimingChanged(
+        existingScheduleRow.scheduled_date,
+        existingScheduleRow.start_time,
+        existingScheduleRow.end_time,
+        draft.scheduled_date,
+        draft.scheduled_time,
+        existingScheduleRow.end_time
+      );
+      const rescheduleReason = String(draft.reschedule_reason || "").trim();
+      if (requiresRescheduleReason && !rescheduleReason) {
+        window.alert("A reschedule reason is required when changing the scheduled date or time.");
+        return;
+      }
+
       try {
-        await updateScheduleEvent(draft.scheduleEventDatabaseId, {
+        const updatedScheduleRow = await updateScheduleEvent(resolvedScheduleEventDatabaseId, {
           crew_id: draft.crew_id || null,
           scheduled_date: draft.scheduled_date,
           start_time: draft.scheduled_time || null,
-          work_order_number: draft.work_order_number || null,
           status: calendarStatusToDatabaseStatus(draft.status),
           notes: draft.notes || null,
+          reschedule_reason: requiresRescheduleReason ? rescheduleReason || null : null,
         });
+        rememberLatestRescheduleReason(updatedScheduleRow.id, updatedScheduleRow.last_reschedule_reason || rescheduleReason);
         setScheduleHistory(prev => [{ id: `sch-${Date.now()}`, type: "residential-reschedule", jobId: draft.job_database_id || draft.job_id, note: `Rescheduled ${draft.customer_name} for ${draft.scheduled_date}` }, ...prev]);
         if (conflictOverrideReason) {
           setOverrideHistory(prev => [{ id: `ovr-${Date.now()}`, jobId: draft.job_database_id || draft.job_id, note: conflictOverrideReason, createdAt: new Date().toISOString() }, ...prev]);
         }
         void refreshJobs();
         setResidentialDraft(null);
+        if (draft.from_phase_edit) {
+          setPhaseDraft(null);
+        }
         setSelectedCalendarJobId(null);
         setSection(draft.return_section || "calendar");
         return;
@@ -2265,18 +2796,65 @@ export default function AdminWorkspace({ appRole, tickets, ticketsLoading = fals
       return;
     }
 
-    let jobId = null;
+    let jobId = resolvedJobId || null;
 
-    try {
-      jobId = await findJobIdByEstimateId(draft.estimateDatabaseId);
-    } catch (error) {
-      showScheduleWriteError("locate the accepted job", error);
-      return;
+    if (!jobId) {
+      try {
+        jobId = await findJobIdByEstimateId(draft.estimateDatabaseId);
+      } catch (error) {
+        showScheduleWriteError("locate the accepted job", error);
+        return;
+      }
     }
 
     if (!jobId) {
       window.alert("No database job was found for this accepted estimate. Confirm the accepted-estimate job trigger has run before scheduling.");
       return;
+    }
+
+    resolvedScheduleEventDatabaseId = getResidentialScheduleEventId(jobId, resolvedScheduleEventDatabaseId);
+    if (resolvedScheduleEventDatabaseId) {
+      const existingScheduleRow = resolveResidentialScheduleRow(jobId, resolvedScheduleEventDatabaseId);
+      const requiresRescheduleReason = existingScheduleRow && scheduleTimingChanged(
+        existingScheduleRow.scheduled_date,
+        existingScheduleRow.start_time,
+        existingScheduleRow.end_time,
+        draft.scheduled_date,
+        draft.scheduled_time,
+        existingScheduleRow.end_time
+      );
+      const rescheduleReason = String(draft.reschedule_reason || "").trim();
+      if (requiresRescheduleReason && !rescheduleReason) {
+        window.alert("A reschedule reason is required when changing the scheduled date or time.");
+        return;
+      }
+
+      try {
+        const updatedScheduleRow = await updateScheduleEvent(resolvedScheduleEventDatabaseId, {
+          crew_id: draft.crew_id || null,
+          scheduled_date: draft.scheduled_date,
+          start_time: draft.scheduled_time || null,
+          status: calendarStatusToDatabaseStatus(draft.status),
+          notes: draft.notes || null,
+          reschedule_reason: requiresRescheduleReason ? rescheduleReason || null : null,
+        });
+        rememberLatestRescheduleReason(updatedScheduleRow.id, updatedScheduleRow.last_reschedule_reason || rescheduleReason);
+        setScheduleHistory(prev => [{ id: `sch-${Date.now()}`, type: "residential-reschedule", jobId, note: `Rescheduled ${draft.customer_name} for ${draft.scheduled_date}` }, ...prev]);
+        if (conflictOverrideReason) {
+          setOverrideHistory(prev => [{ id: `ovr-${Date.now()}`, jobId, note: conflictOverrideReason, createdAt: new Date().toISOString() }, ...prev]);
+        }
+        void refreshJobs();
+        setResidentialDraft(null);
+        if (draft.from_phase_edit) {
+          setPhaseDraft(null);
+        }
+        setSelectedCalendarJobId(null);
+        setSection(draft.return_section || "calendar");
+        return;
+      } catch (error) {
+        showScheduleWriteError("update the calendar event", error);
+        return;
+      }
     }
 
     try {
@@ -2285,7 +2863,6 @@ export default function AdminWorkspace({ appRole, tickets, ticketsLoading = fals
         crew_id: draft.crew_id || null,
         scheduled_date: draft.scheduled_date,
         start_time: draft.scheduled_time || null,
-        work_order_number: draft.work_order_number || null,
         builder_step: "residential_job",
         status: calendarStatusToDatabaseStatus(draft.status),
         notes: draft.notes || null,
@@ -2300,9 +2877,18 @@ export default function AdminWorkspace({ appRole, tickets, ticketsLoading = fals
       }
       void refreshJobs();
       setResidentialDraft(null);
+      if (draft.from_phase_edit) {
+        setPhaseDraft(null);
+      }
       setSelectedJobId(null);
       setSection(draft.return_section || "tickets");
     } catch (error) {
+      if (isResidentialScheduleUniqueViolation(error)) {
+        window.alert("This residential job already has a scheduled event. Reopen it and use Reschedule instead.");
+        void refreshScheduleEvents();
+        void refreshJobs();
+        return;
+      }
       showScheduleWriteError("create the calendar event", error);
     }
   };
@@ -2365,7 +2951,7 @@ export default function AdminWorkspace({ appRole, tickets, ticketsLoading = fals
       if (!phase) return;
       setPhaseDraft({
         ...phase,
-        scheduleEventDatabaseId: phase.databaseId || "",
+        scheduleEventDatabaseId: getScheduleEventDatabaseId(phase),
         job_id: calendarJob.id,
         job_database_id: calendarJob.job_database_id,
         phase_id: phase.id,
@@ -2384,148 +2970,379 @@ export default function AdminWorkspace({ appRole, tickets, ticketsLoading = fals
     if (!phase) return;
     setPhaseDraft({
       ...phase,
-      scheduleEventDatabaseId: phase.scheduleEventDatabaseId || "",
+      scheduleEventDatabaseId: getScheduleEventDatabaseId(phase),
       job_id: job.id,
+      job_database_id: job.databaseId || job.id,
       phase_id: phase.id,
       isResidential: false,
     });
   };
 
-  const saveResidentialReschedule = (draft, overrideReason = "") => {
-    if (!canManageSchedule) return;
-    setPhaseDraft(null);
-    void saveResidentialSchedule({ ...draft, return_section: draft.return_section || "jobs" }, overrideReason);
+  const openPhaseDetails = (jobId, phaseId) => {
+    const sourceJob = getBuilderJobSource(jobId);
+    if (!sourceJob || sourceJob.schedule_type !== "builder_slab") {
+      return;
+    }
+
+    const phase = sortBuilderPhases(sourceJob.phases || []).find(item => item.id === phaseId);
+    if (!phase) {
+      return;
+    }
+
+    setPhaseDetailState({
+      job_id: sourceJob.id,
+      phase_id: phase.id,
+      builder_name: sourceJob.builder_name || "",
+      community: sourceJob.community || "",
+      lot_number: sourceJob.lot_number || "",
+      phase: {
+        ...phase,
+        phase_key: toUiBuilderPhaseKey(phase.phase_key) || phase.phase_key,
+        scheduleEventDatabaseId: getScheduleEventDatabaseId(phase),
+        last_reschedule_reason: phase.last_reschedule_reason || latestRescheduleReasons[getScheduleEventDatabaseId(phase)] || "",
+      },
+    });
   };
 
-  const saveBuilderPhase = (draft, overrideReason = "") => {
+  const saveResidentialReschedule = (draft, overrideReason = "") => {
     if (!canManageSchedule) return;
-    const calendarJob = findCalendarJob(draft.job_id);
-    if (calendarJob) {
-      const sortedPhases = sortBuilderPhases(calendarJob.phases || []).map(phase => ({
+    void saveResidentialSchedule({ ...draft, return_section: draft.return_section || "jobs", from_phase_edit: true }, overrideReason);
+  };
+
+  const saveInitialBuilderWorkflow = async (draft, overrideReason = "") => {
+    if (!canManageSchedule) return;
+
+    for (let idx = 0; idx < (draft.phases || []).length; idx += 1) {
+      const phase = draft.phases[idx];
+      const previousPhase = idx > 0 ? draft.phases[idx - 1] : null;
+
+      if (!phase.scheduled_date) {
+        window.alert(`${phase.phase_label} requires a scheduled date before saving.`);
+        return;
+      }
+
+      if (previousPhase?.scheduled_date && phase.scheduled_date < previousPhase.scheduled_date) {
+        window.alert(`${phase.phase_label} cannot be scheduled before ${previousPhase.phase_label}.`);
+        return;
+      }
+
+      if (isSunday(phase.scheduled_date)) {
+        blockSundaySchedule(phase.phase_label);
+        return;
+      }
+    }
+
+    const saturdayPhase = (draft.phases || []).find(phase => phase.scheduled_date && isSaturday(phase.scheduled_date));
+    if (saturdayPhase && settings.skipWeekendsByDefault && !draft.weekend_override) {
+      if (!settings.allowWeekendOverride) {
+        window.alert("Saturday scheduling requires an override, and weekend overrides are currently disabled.");
+        return;
+      }
+
+      setWeekendOverrideState({
+        defaultCrewId: saturdayPhase.crew_id || crews[0]?.id || "",
+        message: `${saturdayPhase.phase_label} is being scheduled on Saturday, ${fmtDate(saturdayPhase.scheduled_date)}.`,
+        onConfirm: override => {
+          setWeekendOverrideState(null);
+          void saveInitialBuilderWorkflow({
+            ...draft,
+            weekend_override: true,
+            charge_weekend_fee: override.charge_weekend_fee,
+          }, overrideReason);
+        },
+        onCancel: () => setWeekendOverrideState(null),
+      });
+      return;
+    }
+
+    const sourceJob = getBuilderJobSource(draft.job_id, draft.job_database_id);
+    if (!sourceJob || sourceJob.schedule_type !== "builder_slab") {
+      window.alert("This builder workflow does not have a matching database job record, so phase scheduling cannot be written to Supabase.");
+      return;
+    }
+
+    const jobDatabaseId = draft.job_database_id || sourceJob.job_database_id || sourceJob.databaseId || sourceJob.id;
+    const updatedJob = {
+      ...sourceJob,
+      job_database_id: jobDatabaseId,
+      phases: (draft.phases || []).map(phase => ({
         ...phase,
-        scheduleEventDatabaseId: phase.scheduleEventDatabaseId || phase.databaseId || "",
-      }));
-      const phaseIndex = sortedPhases.findIndex(phase => phase.id === draft.phase_id);
-      if (phaseIndex < 0) return;
-      const previousPhase = sortedPhases[phaseIndex - 1];
-      if (previousPhase?.scheduled_date && draft.scheduled_date && draft.scheduled_date < previousPhase.scheduled_date) {
-        window.alert(`${draft.phase_label} cannot be scheduled before ${previousPhase.phase_label}.`);
-        return;
-      }
-      if (draft.scheduled_date && isSunday(draft.scheduled_date)) {
-        blockSundaySchedule(draft.phase_label);
-        return;
-      }
-      if (draft.scheduled_date && isSaturday(draft.scheduled_date) && settings.skipWeekendsByDefault && !draft.weekend_override) {
-        if (!settings.allowWeekendOverride) {
-          window.alert("Saturday scheduling requires an override, and weekend overrides are currently disabled.");
-          return;
-        }
-        setWeekendOverrideState({
-          defaultCrewId: draft.crew_id,
-          message: `${draft.phase_label} is being scheduled on Saturday, ${fmtDate(draft.scheduled_date)}.`,
-          onConfirm: override => {
-            setWeekendOverrideState(null);
-            void saveBuilderPhase({ ...draft, crew_id: override.crew_id, charge_weekend_fee: override.charge_weekend_fee, weekend_override: true }, overrideReason);
-          },
-          onCancel: () => setWeekendOverrideState(null),
+        phase_key: toUiBuilderPhaseKey(phase.phase_key) || phase.phase_key,
+      })),
+    };
+    const candidateEvents = buildBuilderEvents(updatedJob);
+    const ignoreEventIds = (draft.phases || []).map(phase => phase.scheduleEventDatabaseId).filter(Boolean);
+    const conflicts = detectCrewConflicts({
+      candidateEvents,
+      existingEvents: scheduleEvents.filter(event => !ignoreEventIds.includes(event.databaseId)),
+      crews,
+    });
+    if (conflicts.length && !overrideReason) {
+      setConflictState({
+        conflicts,
+        defaultCrewId: draft.phases.find(phase => phase.crew_id)?.crew_id || crews[0]?.id || "",
+        reopen: () => setBuilderWorkflowDraft(draft),
+        onReassign: newCrewId => void saveInitialBuilderWorkflow({
+          ...draft,
+          phases: draft.phases.map(phase => phase.counts_toward_crew ? { ...phase, crew_id: newCrewId } : phase),
+        }, ""),
+        onOverride: note => void saveInitialBuilderWorkflow(draft, note),
+        onCancel: () => setBuilderWorkflowDraft(null),
+      });
+      setBuilderWorkflowDraft(null);
+      return;
+    }
+
+    const workingDraft = {
+      ...draft,
+      phases: draft.phases.map(phase => ({ ...phase })),
+    };
+    let savedCount = 0;
+
+    try {
+      for (const phase of workingDraft.phases) {
+        const scheduleEventDatabaseId = phase.scheduleEventDatabaseId || resolveLoadedBuilderPhaseScheduleEventId(workingDraft.job_id, jobDatabaseId, phase.phase_key);
+        const scheduleWritePayload = {
+          job_id: jobDatabaseId,
+          crew_id: phase.crew_id || null,
+          scheduled_date: phase.scheduled_date,
+          start_time: phase.scheduled_time || null,
+          builder_step: toDatabaseBuilderStep(phase.phase_key),
+          status: calendarStatusToDatabaseStatus(phase.status),
+          notes: phase.notes || null,
+        };
+
+        const savedScheduleRow = scheduleEventDatabaseId
+          ? await updateScheduleEvent(scheduleEventDatabaseId, scheduleWritePayload)
+          : await createScheduleEvent(scheduleWritePayload);
+
+        savedCount += 1;
+        phase.scheduleEventDatabaseId = savedScheduleRow.id;
+        phase.databaseId = savedScheduleRow.id;
+        phase.work_order_number = savedScheduleRow.work_order_number || phase.work_order_number || "";
+        phase.last_reschedule_reason = savedScheduleRow.last_reschedule_reason || phase.last_reschedule_reason || "";
+        phase.last_rescheduled_at = savedScheduleRow.last_rescheduled_at || phase.last_rescheduled_at || "";
+        phase.last_rescheduled_by = savedScheduleRow.last_rescheduled_by || phase.last_rescheduled_by || "";
+        setBuilderWorkflowDraft({
+          ...workingDraft,
+          phases: workingDraft.phases.map(item => ({ ...item })),
         });
+      }
+
+      setScheduleHistory(prev => [{ id: `sch-${Date.now()}`, type: "builder-workflow", jobId: jobDatabaseId, note: `Scheduled builder slab workflow starting ${workingDraft.phases[0]?.scheduled_date || ""}` }, ...prev]);
+      if (overrideReason) {
+        setOverrideHistory(prev => [{ id: `ovr-${Date.now()}`, jobId: jobDatabaseId, note: overrideReason, createdAt: new Date().toISOString() }, ...prev]);
+      }
+      setBuilderWorkflowDraft(null);
+      void refreshScheduleEvents();
+      void refreshJobs();
+    } catch (error) {
+      if (savedCount > 0) {
+        setBuilderWorkflowDraft({
+          ...workingDraft,
+          phases: workingDraft.phases.map(item => ({ ...item })),
+        });
+        void refreshScheduleEvents();
+        void refreshJobs();
+      }
+      showScheduleWriteError(savedCount > 0 ? "finish saving the builder workflow" : "save the builder workflow", error);
+    }
+  };
+
+  const saveBuilderPhase = async (draft, overrideReason = "") => {
+    if (!canManageSchedule) return;
+    if (!validateRescheduleReasonLength(draft.reschedule_reason)) return;
+    const sourceJob = getBuilderJobSource(draft.job_id, draft.job_database_id);
+    if (!sourceJob || sourceJob.schedule_type !== "builder_slab") {
+      setPhaseDraft(null);
+      window.alert("This builder workflow does not have a matching database job record, so phase scheduling cannot be written to Supabase.");
+      return;
+    }
+
+    const jobDatabaseId = sourceJob.job_database_id || sourceJob.databaseId || draft.job_database_id || draft.job_id;
+    const normalizedDraft = {
+      ...draft,
+      phase_key: toUiBuilderPhaseKey(draft.phase_key) || draft.phase_key,
+      scheduleEventDatabaseId: draft.scheduleEventDatabaseId || resolveLoadedBuilderPhaseScheduleEventId(draft.job_id, jobDatabaseId, draft.phase_key),
+    };
+    const sortedPhases = sortBuilderPhases((sourceJob.phases || []).map(phase => ({
+      ...phase,
+      phase_key: toUiBuilderPhaseKey(phase.phase_key) || phase.phase_key,
+      scheduleEventDatabaseId: getScheduleEventDatabaseId(phase),
+    })));
+    const phaseIndex = sortedPhases.findIndex(phase => phase.id === normalizedDraft.phase_id);
+    if (phaseIndex < 0) return;
+    const persistedStandardPhaseCount = sortedPhases.filter(phase =>
+      BUILDER_SLAB_WORKFLOW.some(workflowPhase => workflowPhase.uiKey === phase.phase_key)
+      && !!(phase.scheduleEventDatabaseId || resolveLoadedBuilderPhaseScheduleEventId(draft.job_id, jobDatabaseId, phase.phase_key))
+    ).length;
+
+    if (!normalizedDraft.scheduleEventDatabaseId && persistedStandardPhaseCount === 0) {
+      if (normalizedDraft.phase_key !== "form_slab") {
+        window.alert("Schedule Form Slab first so the initial builder workflow can create all three standard phases together.");
         return;
       }
 
-      const existingPhase = sortedPhases[phaseIndex];
-      const willPushForward = existingPhase.scheduled_date && draft.scheduled_date && draft.scheduled_date > existingPhase.scheduled_date && phaseIndex < sortedPhases.length - 1;
-      if (willPushForward) {
-        const updatedPhases = sortedPhases.map((phase, idx) => idx === phaseIndex ? { ...phase, ...draft, conflict_override_reason: overrideReason } : { ...phase });
-        let cursor = draft.scheduled_date;
-        for (let idx = phaseIndex + 1; idx < updatedPhases.length; idx += 1) {
-          cursor = nextWorkingDate(cursor, 1);
-          updatedPhases[idx] = { ...updatedPhases[idx], scheduled_date: cursor };
-        }
-        const updatedJob = { ...calendarJob, phases: updatedPhases, databaseBacked: true };
-        const candidateEvents = buildBuilderEvents(updatedJob);
-        const ignoreEventIds = sortedPhases.map(phase => phase.scheduleEventDatabaseId);
-        const conflicts = detectCrewConflicts({
-          candidateEvents,
-          existingEvents: scheduleEvents.filter(event => !ignoreEventIds.includes(event.databaseId)),
-          crews,
-        });
-        const summary = updatedPhases.slice(phaseIndex).map(phase => {
-          const original = sortedPhases.find(item => item.id === phase.id);
-          const phaseConflict = conflicts.find(conflict => conflict.candidate.phaseId === phase.id);
-          return {
-            phaseId: phase.id,
-            phase_label: phase.phase_label,
-            original_date: original?.scheduled_date || "",
-            new_date: phase.scheduled_date,
-            crew_label: phase.crew_id ? `Crew ${findCrewById(crews, phase.crew_id)?.number || "-"}` : "-",
-            conflict: !!phaseConflict,
-          };
-        });
-        setPushPreview({
-          jobId: calendarJob.id,
-          updatedJob,
-          conflicts,
-          summary,
-          overrideReason,
-          databaseBacked: true,
-        });
-        setPhaseDraft(null);
+      setPhaseDraft(null);
+      setBuilderWorkflowDraft(createInitialBuilderWorkflowDraft(sourceJob, normalizedDraft, jobDatabaseId));
+      return;
+    }
+
+    const previousPhase = sortedPhases[phaseIndex - 1];
+    if (previousPhase?.scheduled_date && normalizedDraft.scheduled_date && normalizedDraft.scheduled_date < previousPhase.scheduled_date) {
+      window.alert(`${normalizedDraft.phase_label} cannot be scheduled before ${previousPhase.phase_label}.`);
+      return;
+    }
+    if (normalizedDraft.scheduled_date && isSunday(normalizedDraft.scheduled_date)) {
+      blockSundaySchedule(normalizedDraft.phase_label);
+      return;
+    }
+    if (normalizedDraft.scheduled_date && isSaturday(normalizedDraft.scheduled_date) && settings.skipWeekendsByDefault && !normalizedDraft.weekend_override) {
+      if (!settings.allowWeekendOverride) {
+        window.alert("Saturday scheduling requires an override, and weekend overrides are currently disabled.");
         return;
       }
+      setWeekendOverrideState({
+        defaultCrewId: normalizedDraft.crew_id,
+        message: `${normalizedDraft.phase_label} is being scheduled on Saturday, ${fmtDate(normalizedDraft.scheduled_date)}.`,
+        onConfirm: override => {
+          setWeekendOverrideState(null);
+          void saveBuilderPhase({ ...normalizedDraft, crew_id: override.crew_id, charge_weekend_fee: override.charge_weekend_fee, weekend_override: true }, overrideReason);
+        },
+        onCancel: () => setWeekendOverrideState(null),
+      });
+      return;
+    }
 
-      const updatedJob = {
-        ...calendarJob,
-        phases: sortedPhases.map((phase, idx) => idx === phaseIndex ? { ...phase, ...draft, conflict_override_reason: overrideReason } : { ...phase }),
-      };
+    const existingPhase = sortedPhases[phaseIndex];
+    const hasLaterPhases = sortedPhases.slice(phaseIndex + 1).length > 0;
+    const willPushForward = existingPhase.scheduled_date && normalizedDraft.scheduled_date && normalizedDraft.scheduled_date > existingPhase.scheduled_date && hasLaterPhases;
+    if (willPushForward) {
+      const updatedPhases = sortedPhases.map((phase, idx) => idx === phaseIndex ? { ...phase, ...normalizedDraft, conflict_override_reason: overrideReason } : { ...phase });
+      let cursor = normalizedDraft.scheduled_date;
+      for (let idx = phaseIndex + 1; idx < updatedPhases.length; idx += 1) {
+        cursor = nextWorkingDate(cursor, 1);
+        updatedPhases[idx] = { ...updatedPhases[idx], scheduled_date: cursor };
+      }
+      const updatedJob = { ...sourceJob, job_database_id: jobDatabaseId, phases: updatedPhases, databaseBacked: true };
       const candidateEvents = buildBuilderEvents(updatedJob);
-      const ignoreEventIds = sortedPhases.map(phase => phase.scheduleEventDatabaseId);
+      const ignoreEventIds = sortedPhases.map(phase => phase.scheduleEventDatabaseId).filter(Boolean);
       const conflicts = detectCrewConflicts({
         candidateEvents,
         existingEvents: scheduleEvents.filter(event => !ignoreEventIds.includes(event.databaseId)),
         crews,
       });
-      if (conflicts.length && !overrideReason) {
-        setConflictState({
-          conflicts,
-          defaultCrewId: draft.crew_id,
-          reopen: () => setPhaseDraft(draft),
-          onReassign: newCrewId => void saveBuilderPhase({ ...draft, crew_id: newCrewId }, ""),
-          onOverride: note => void saveBuilderPhase({ ...draft }, note),
-          onCancel: () => setPhaseDraft(null),
-        });
-        setPhaseDraft(null);
-        return;
-      }
-
-      void updateScheduleEvent(draft.scheduleEventDatabaseId, {
-        crew_id: draft.crew_id || null,
-        scheduled_date: draft.scheduled_date,
-        start_time: draft.scheduled_time || null,
-        work_order_number: draft.work_order_number || null,
-        builder_step: draft.phase_key || null,
-        status: calendarStatusToDatabaseStatus(draft.status),
-        notes: draft.notes || null,
-      }).then(() => {
-        setScheduleHistory(prev => [{ id: `sch-${Date.now()}`, type: "builder-phase", jobId: calendarJob.job_database_id, note: `Updated ${draft.phase_label} to ${draft.scheduled_date}` }, ...prev]);
-        if (overrideReason) {
-          setOverrideHistory(prev => [{ id: `ovr-${Date.now()}`, jobId: calendarJob.job_database_id, note: overrideReason, createdAt: new Date().toISOString() }, ...prev]);
-        }
-        void refreshJobs();
-        setPhaseDraft(null);
-      }).catch(error => {
-        showScheduleWriteError("update the builder schedule", error);
+      const summary = updatedPhases.slice(phaseIndex).map(phase => {
+        const original = sortedPhases.find(item => item.id === phase.id);
+        const phaseConflict = conflicts.find(conflict => conflict.candidate.phaseId === phase.id);
+        return {
+          phaseId: phase.id,
+          phase_label: phase.phase_label,
+          original_date: original?.scheduled_date || "",
+          new_date: phase.scheduled_date,
+          crew_label: phase.crew_id ? `Crew ${findCrewById(crews, phase.crew_id)?.number || "-"}` : "-",
+          conflict: !!phaseConflict,
+        };
       });
+      setPushPreview({
+        jobId: sourceJob.id,
+        updatedJob,
+        originalPhases: sortedPhases,
+        startPhaseIndex: phaseIndex,
+        conflicts,
+        summary,
+        overrideReason,
+        requiresRescheduleReason: updatedPhases.slice(phaseIndex).some(phase => {
+          const originalPhase = sortedPhases.find(item => item.id === phase.id);
+          const phaseScheduleEventDatabaseId = phase.scheduleEventDatabaseId || resolveLoadedBuilderPhaseScheduleEventId(sourceJob.id, jobDatabaseId, phase.phase_key);
+          return !!phaseScheduleEventDatabaseId && !!originalPhase && scheduleTimingChanged(
+            originalPhase.scheduled_date,
+            originalPhase.scheduled_time,
+            originalPhase.end_time,
+            phase.scheduled_date,
+            phase.scheduled_time,
+            originalPhase.end_time
+          );
+        }),
+        reschedule_reason: normalizedDraft.reschedule_reason || "",
+        databaseBacked: true,
+      });
+      setPhaseDraft(null);
       return;
     }
 
-    setPhaseDraft(null);
-    window.alert("This builder workflow does not have schedule_events-backed phases yet, so phase editing cannot be persisted in this phase.");
+    const updatedJob = {
+      ...sourceJob,
+      job_database_id: jobDatabaseId,
+      phases: sortedPhases.map((phase, idx) => idx === phaseIndex ? { ...phase, ...normalizedDraft, conflict_override_reason: overrideReason } : { ...phase }),
+    };
+    const candidateEvents = buildBuilderEvents(updatedJob);
+    const ignoreEventIds = sortedPhases.map(phase => phase.scheduleEventDatabaseId).filter(Boolean);
+    const conflicts = detectCrewConflicts({
+      candidateEvents,
+      existingEvents: scheduleEvents.filter(event => !ignoreEventIds.includes(event.databaseId)),
+      crews,
+    });
+    if (conflicts.length && !overrideReason) {
+      setConflictState({
+        conflicts,
+        defaultCrewId: normalizedDraft.crew_id,
+        reopen: () => setPhaseDraft(normalizedDraft),
+        onReassign: newCrewId => void saveBuilderPhase({ ...normalizedDraft, crew_id: newCrewId }, ""),
+        onOverride: note => void saveBuilderPhase({ ...normalizedDraft }, note),
+        onCancel: () => setPhaseDraft(null),
+      });
+      setPhaseDraft(null);
+      return;
+    }
+
+    const requiresRescheduleReason = !!normalizedDraft.scheduleEventDatabaseId && scheduleTimingChanged(
+      existingPhase.scheduled_date,
+      existingPhase.scheduled_time,
+      existingPhase.end_time,
+      normalizedDraft.scheduled_date,
+      normalizedDraft.scheduled_time,
+      existingPhase.end_time
+    );
+    const rescheduleReason = String(normalizedDraft.reschedule_reason || "").trim();
+    if (requiresRescheduleReason && !rescheduleReason) {
+      window.alert("A reschedule reason is required when changing the scheduled date or time.");
+      return;
+    }
+
+    const scheduleWritePayload = {
+      job_id: jobDatabaseId,
+      crew_id: normalizedDraft.crew_id || null,
+      scheduled_date: normalizedDraft.scheduled_date,
+      start_time: normalizedDraft.scheduled_time || null,
+      builder_step: toDatabaseBuilderStep(normalizedDraft.phase_key),
+      status: calendarStatusToDatabaseStatus(normalizedDraft.status),
+      notes: normalizedDraft.notes || null,
+      reschedule_reason: requiresRescheduleReason ? rescheduleReason || null : null,
+    };
+
+    try {
+      if (normalizedDraft.scheduleEventDatabaseId) {
+        const updatedScheduleRow = await updateScheduleEvent(normalizedDraft.scheduleEventDatabaseId, scheduleWritePayload);
+        rememberLatestRescheduleReason(updatedScheduleRow.id, updatedScheduleRow.last_reschedule_reason || rescheduleReason);
+      } else {
+        await createScheduleEvent(scheduleWritePayload);
+      }
+      setScheduleHistory(prev => [{ id: `sch-${Date.now()}`, type: "builder-phase", jobId: jobDatabaseId, note: `${existingPhase.scheduled_date ? "Updated" : "Scheduled"} ${normalizedDraft.phase_label} for ${normalizedDraft.scheduled_date}` }, ...prev]);
+      if (overrideReason) {
+        setOverrideHistory(prev => [{ id: `ovr-${Date.now()}`, jobId: jobDatabaseId, note: overrideReason, createdAt: new Date().toISOString() }, ...prev]);
+      }
+      void refreshJobs();
+      setPhaseDraft(null);
+    } catch (error) {
+      showScheduleWriteError(normalizedDraft.scheduleEventDatabaseId ? "update the builder schedule" : "create the builder schedule", error);
+    }
   };
 
-  const applyPushPreview = (overrideReason = "") => {
+  const applyPushPreview = async (overrideReason = "", rescheduleReason = "") => {
     if (!canManageSchedule) return;
     if (!pushPreview) return;
+    if (!validateRescheduleReasonLength(rescheduleReason)) return;
     if (pushPreview.databaseBacked) {
       if (pushPreview.conflicts.length && !overrideReason) {
         setConflictState({
@@ -2535,36 +3352,94 @@ export default function AdminWorkspace({ appRole, tickets, ticketsLoading = fals
           onReassign: newCrewId => {
             const revised = JSON.parse(JSON.stringify(pushPreview.updatedJob));
             revised.phases = revised.phases.map(phase => phase.counts_toward_crew ? { ...phase, crew_id: newCrewId } : phase);
-            setPushPreview({ ...pushPreview, updatedJob: revised, conflicts: [] });
+            setPushPreview({ ...pushPreview, updatedJob: revised, conflicts: [], reschedule_reason: rescheduleReason });
             setConflictState(null);
           },
-          onOverride: note => applyPushPreview(note),
+          onOverride: note => applyPushPreview(note, rescheduleReason),
           onCancel: () => { setPushPreview(null); },
         });
         setPushPreview(null);
         return;
       }
 
-      Promise.all(
-        (pushPreview.updatedJob.phases || []).map(phase => updateScheduleEvent(phase.scheduleEventDatabaseId, {
-          crew_id: phase.crew_id || null,
-          scheduled_date: phase.scheduled_date,
-          start_time: phase.scheduled_time || null,
-          work_order_number: phase.work_order_number || null,
-          builder_step: phase.phase_key || null,
-          status: calendarStatusToDatabaseStatus(phase.status),
-          notes: phase.notes || null,
-        }))
-      ).then(() => {
-        setScheduleHistory(prev => [{ id: `sch-${Date.now()}`, type: "builder-push", jobId: pushPreview.updatedJob.job_database_id, note: "Builder phases shifted forward in order." }, ...prev]);
+      const jobDatabaseId = pushPreview.updatedJob.job_database_id || pushPreview.updatedJob.databaseId || pushPreview.updatedJob.id;
+      const originalPhases = pushPreview.originalPhases || [];
+      const affectedPhases = (pushPreview.updatedJob.phases || []).slice(pushPreview.startPhaseIndex || 0);
+      const changedPersistedPhases = affectedPhases.filter(phase => {
+        const phaseScheduleEventDatabaseId = phase.scheduleEventDatabaseId || resolveLoadedBuilderPhaseScheduleEventId(pushPreview.jobId, jobDatabaseId, phase.phase_key);
+        if (!phaseScheduleEventDatabaseId) {
+          return false;
+        }
+
+        const originalPhase = originalPhases.find(item => item.id === phase.id);
+        if (!originalPhase) {
+          return false;
+        }
+
+        return scheduleTimingChanged(
+          originalPhase.scheduled_date,
+          originalPhase.scheduled_time,
+          originalPhase.end_time,
+          phase.scheduled_date,
+          phase.scheduled_time,
+          originalPhase.end_time
+        );
+      });
+
+      if (changedPersistedPhases.length > 0 && !String(rescheduleReason || "").trim()) {
+        window.alert("A push-forward reason is required because one or more existing scheduled phases are being rescheduled.");
+        return;
+      }
+
+      try {
+        for (const phase of affectedPhases) {
+          const scheduleEventDatabaseId = phase.scheduleEventDatabaseId || resolveLoadedBuilderPhaseScheduleEventId(pushPreview.jobId, jobDatabaseId, phase.phase_key);
+          const originalPhase = originalPhases.find(item => item.id === phase.id);
+          const phaseRescheduleReason = originalPhase && scheduleTimingChanged(
+            originalPhase.scheduled_date,
+            originalPhase.scheduled_time,
+            originalPhase.end_time,
+            phase.scheduled_date,
+            phase.scheduled_time,
+            originalPhase.end_time
+          )
+            ? String(rescheduleReason || "").trim() || null
+            : null;
+          const scheduleWritePayload = {
+            job_id: jobDatabaseId,
+            crew_id: phase.crew_id || null,
+            scheduled_date: phase.scheduled_date,
+            start_time: phase.scheduled_time || null,
+            builder_step: toDatabaseBuilderStep(phase.phase_key),
+            status: calendarStatusToDatabaseStatus(phase.status),
+            notes: phase.notes || null,
+            reschedule_reason: phaseRescheduleReason,
+          };
+
+          if (scheduleEventDatabaseId) {
+            const updatedScheduleRow = await updateScheduleEvent(scheduleEventDatabaseId, scheduleWritePayload);
+            rememberLatestRescheduleReason(updatedScheduleRow.id, updatedScheduleRow.last_reschedule_reason || phaseRescheduleReason);
+            phase.scheduleEventDatabaseId = updatedScheduleRow.id;
+            phase.work_order_number = updatedScheduleRow.work_order_number || phase.work_order_number || "";
+            phase.last_reschedule_reason = updatedScheduleRow.last_reschedule_reason || phaseRescheduleReason || phase.last_reschedule_reason || "";
+            continue;
+          }
+
+          const createdScheduleRow = await createScheduleEvent(scheduleWritePayload);
+          phase.scheduleEventDatabaseId = createdScheduleRow.id;
+          phase.work_order_number = createdScheduleRow.work_order_number || phase.work_order_number || "";
+          phase.last_reschedule_reason = createdScheduleRow.last_reschedule_reason || phase.last_reschedule_reason || "";
+        }
+
+        setScheduleHistory(prev => [{ id: `sch-${Date.now()}`, type: "builder-push", jobId: jobDatabaseId, note: "Builder phases shifted forward in order." }, ...prev]);
         if (overrideReason) {
-          setOverrideHistory(prev => [{ id: `ovr-${Date.now()}`, jobId: pushPreview.updatedJob.job_database_id, note: overrideReason, createdAt: new Date().toISOString() }, ...prev]);
+          setOverrideHistory(prev => [{ id: `ovr-${Date.now()}`, jobId: jobDatabaseId, note: overrideReason, createdAt: new Date().toISOString() }, ...prev]);
         }
         void refreshJobs();
         setPushPreview(null);
-      }).catch(error => {
+      } catch (error) {
         showScheduleWriteError("apply the builder schedule push", error);
-      });
+      }
       return;
     }
     window.alert("This builder schedule push cannot be persisted until the workflow is backed by schedule_events.");
@@ -2581,6 +3456,8 @@ export default function AdminWorkspace({ appRole, tickets, ticketsLoading = fals
         <JobDetailView
           job={selectedCalendarJob}
           crews={crews}
+          latestRescheduleReasons={latestRescheduleReasons}
+          profileDisplayNames={profileDisplayNames}
           onBack={() => setSelectedCalendarJobId(null)}
           onSaveJob={job => {
             if (!canManageSchedule || !job.databaseId) return;
@@ -2594,12 +3471,13 @@ export default function AdminWorkspace({ appRole, tickets, ticketsLoading = fals
             });
           }}
           onOpenPhaseEdit={openPhaseEdit}
+          onOpenPhaseDetails={openPhaseDetails}
           readOnly={calendarReadOnly}
         />
       );
     }
     if (selectedJob) {
-      return <JobDetailView job={selectedJob} crews={crews} onBack={() => setSelectedJobId(null)} onSaveJob={job => {
+      return <JobDetailView job={selectedJob} crews={crews} latestRescheduleReasons={latestRescheduleReasons} profileDisplayNames={profileDisplayNames} onBack={() => setSelectedJobId(null)} onSaveJob={job => {
         if (!canManageSchedule) return;
         if (job.schedule_type === "residential" && job.scheduleEventDatabaseId) {
           void updateScheduleEvent(job.scheduleEventDatabaseId, {
@@ -2631,7 +3509,7 @@ export default function AdminWorkspace({ appRole, tickets, ticketsLoading = fals
         }).catch(error => {
           showScheduleWriteError("update the job", error);
         });
-      }} onOpenPhaseEdit={openPhaseEdit} readOnly={calendarReadOnly} />;
+      }} onOpenPhaseEdit={openPhaseEdit} onOpenPhaseDetails={openPhaseDetails} readOnly={calendarReadOnly} />;
     }
     if (section === "dashboard") return <DashboardHomeSection tickets={tickets} jobs={jobs} events={allEvents} conflicts={activeConflicts} setSection={setSection} />;
     if (section === "tickets") return <EstimateTicketsSection tickets={tickets} ticketsLoading={ticketsLoading} ticketsError={ticketsError} onSelectTicket={ticket => setSelectedTicketId(ticket.id)} onAcceptTicket={ticket => applyTicketStatus(ticket, "Estimate Accepted", "Estimate accepted and ready for office scheduling.")} onScheduleTicket={openResidentialSchedule} jobs={jobs} scheduledEstimateDatabaseIds={scheduledEstimateDatabaseIds} />;
@@ -2679,8 +3557,32 @@ export default function AdminWorkspace({ appRole, tickets, ticketsLoading = fals
 
       {canManageSchedule && builderDraft && <BuilderJobModal draft={builderDraft} crews={crews} builders={builders} onClose={() => setBuilderDraft(null)} onSave={createBuilderJob} />}
       {hasFullAccess(appRole) && builderRecordDraft && <BuilderRecordModal draft={builderRecordDraft} onClose={() => setBuilderRecordDraft(null)} onSave={createBuilderRecord} />}
+      {canManageSchedule && builderWorkflowDraft && <BuilderWorkflowScheduleModal draft={builderWorkflowDraft} crews={crews} onClose={() => setBuilderWorkflowDraft(null)} onSave={saveInitialBuilderWorkflow} />}
       {canManageSchedule && phaseDraft && <PhaseEditModal draft={phaseDraft} crews={crews} onClose={() => setPhaseDraft(null)} onSave={phaseDraft.isResidential ? saveResidentialReschedule : saveBuilderPhase} isResidential={phaseDraft.isResidential} />}
-      {canManageSchedule && pushPreview && <PushSummaryModal preview={pushPreview} onClose={() => setPushPreview(null)} onConfirm={() => applyPushPreview("")} />}
+      {phaseDetailState && (
+        <BuilderPhaseDetailsModal
+          detail={phaseDetailState}
+          crews={crews}
+          profileDisplayNames={profileDisplayNames}
+          onClose={() => setPhaseDetailState(null)}
+          onSchedule={() => {
+            const { job_id, phase_id } = phaseDetailState;
+            setPhaseDetailState(null);
+            openPhaseEdit(job_id, phase_id);
+          }}
+          onEdit={() => {
+            const { job_id, phase_id } = phaseDetailState;
+            setPhaseDetailState(null);
+            openPhaseEdit(job_id, phase_id);
+          }}
+          onReschedule={() => {
+            const { job_id, phase_id } = phaseDetailState;
+            setPhaseDetailState(null);
+            openPhaseEdit(job_id, phase_id);
+          }}
+        />
+      )}
+      {canManageSchedule && pushPreview && <PushSummaryModal preview={pushPreview} onClose={() => setPushPreview(null)} onConfirm={reason => applyPushPreview("", reason)} />}
       {canManageSchedule && weekendOverrideState && (
         <WeekendOverrideModal
           state={weekendOverrideState}

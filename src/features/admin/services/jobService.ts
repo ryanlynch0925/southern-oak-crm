@@ -57,10 +57,20 @@ function summarizeSupabaseError(error: unknown): SupabaseErrorSummary {
   };
 }
 
+function isMissingPurchaseOrderNumberError(error: unknown) {
+  const summary = summarizeSupabaseError(error);
+  const text = `${summary.message || ""} ${summary.details || ""}`.toLowerCase();
+  return summary.code === "42703" && text.includes("purchase_order_number");
+}
+
 function isMissingBuilderJobFieldsError(error: unknown) {
   const summary = summarizeSupabaseError(error);
   const text = `${summary.message || ""} ${summary.details || ""}`.toLowerCase();
-  return text.includes("builder_id") || text.includes("community") || text.includes("lot_number");
+  return summary.code === "42703" && (
+    text.includes("builder_id")
+    || text.includes("community")
+    || text.includes("lot_number")
+  );
 }
 
 function throwJobServiceError(context: string, error: unknown): never {
@@ -80,6 +90,7 @@ const JOB_SELECT_WITH_BUILDER_FIELDS = `
   id,
   customer_id,
   estimate_id,
+  purchase_order_number,
   builder_id,
   job_name,
   job_address,
@@ -181,7 +192,7 @@ export async function fetchJobs() {
     return (builderFieldResponse.data || []).map(toJobRow);
   }
 
-  if (!isMissingBuilderJobFieldsError(builderFieldResponse.error)) {
+  if (!isMissingPurchaseOrderNumberError(builderFieldResponse.error)) {
     throwJobServiceError("Unable to load jobs", builderFieldResponse.error);
   }
 
@@ -205,7 +216,7 @@ export async function fetchJobById(jobId: string) {
     return toJobRow(builderFieldResponse.data);
   }
 
-  if (!isMissingBuilderJobFieldsError(builderFieldResponse.error)) {
+  if (!isMissingPurchaseOrderNumberError(builderFieldResponse.error)) {
     throwJobServiceError(`Unable to load job ${jobId}`, builderFieldResponse.error);
   }
 
@@ -295,7 +306,7 @@ export async function createBuilderJob(draft: BuilderJobDraft) {
       community: draft.community.trim() || null,
       lot_number: draft.lotNumber.trim() || null,
     })
-    .select(JOB_SELECT_WITH_BUILDER_FIELDS)
+    .select("id")
     .single();
 
   if (error) {
@@ -306,5 +317,5 @@ export async function createBuilderJob(draft: BuilderJobDraft) {
     throwJobServiceError(`Unable to create builder job for ${draft.builder.name}`, error);
   }
 
-  return toJobRow(data);
+  return fetchJobById(data.id);
 }

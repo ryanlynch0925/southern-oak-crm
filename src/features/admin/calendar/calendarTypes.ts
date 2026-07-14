@@ -11,6 +11,7 @@ export type CalendarUiStatus =
   | "Completed"
   | "Delayed"
   | "Cancelled"
+  | "Ready to Schedule"
   | "Pending";
 
 export type ScheduleType = "residential" | "builder_slab";
@@ -34,12 +35,16 @@ export interface DatabaseScheduleJobRow {
   id: string;
   customer_id: string;
   estimate_id: string | null;
+  builder_id?: string | null;
+  purchase_order_number?: string | null;
   job_name: string;
   job_address: string | null;
   job_type: string;
   status: string;
   description: string | null;
   notes: string | null;
+  community?: string | null;
+  lot_number?: string | null;
   customer: DatabaseScheduleCustomerRow | null;
 }
 
@@ -61,6 +66,9 @@ export interface DatabaseScheduleEventRow {
   builder_step: string | null;
   status: DatabaseScheduleStatus;
   notes: string | null;
+  last_reschedule_reason?: string | null;
+  last_rescheduled_at?: string | null;
+  last_rescheduled_by?: string | null;
   created_at: string;
   updated_at: string | null;
   job: DatabaseScheduleJobRow | null;
@@ -98,18 +106,23 @@ export interface CalendarEvent {
 export interface ScheduleCalendarPhase {
   id: string;
   databaseId: string;
+  scheduleEventDatabaseId?: string;
   phase_key: string;
   phase_label: string;
   responsible_party: string;
   counts_toward_crew: boolean;
   scheduled_date: string;
   scheduled_time: string;
+  end_time?: string;
   crew_id: string;
   work_order_number: string;
   day_capacity_used: number;
   estimated_duration: number;
   status: CalendarUiStatus;
   notes: string;
+  last_reschedule_reason?: string;
+  last_rescheduled_at?: string;
+  last_rescheduled_by?: string;
 }
 
 export interface ScheduleCalendarJob {
@@ -134,6 +147,9 @@ export interface ScheduleCalendarJob {
   work_order_number: string;
   status: CalendarUiStatus;
   notes: string;
+  last_reschedule_reason?: string;
+  last_rescheduled_at?: string;
+  last_rescheduled_by?: string;
   phases: ScheduleCalendarPhase[];
 }
 
@@ -147,4 +163,5 @@ export interface ScheduleEventWritePayload {
   builder_step?: string | null;
   status?: DatabaseScheduleStatus;
   notes?: string | null;
+  reschedule_reason?: string | null;
 }

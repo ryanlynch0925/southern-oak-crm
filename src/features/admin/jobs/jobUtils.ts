@@ -4,6 +4,7 @@ import {
   getCountsTowardCrew,
   getResponsibleParty,
   getSchedulePhaseLabel,
+  toUiBuilderPhaseKey,
 } from "../calendar/calendarUtils";
 
 export interface DatabaseJobCustomerRow {
@@ -32,6 +33,9 @@ export interface DatabaseJobScheduleEventRow {
   builder_step: string | null;
   status: string;
   notes: string | null;
+  last_reschedule_reason?: string | null;
+  last_rescheduled_at?: string | null;
+  last_rescheduled_by?: string | null;
   created_at: string;
   updated_at: string | null;
 }
@@ -40,6 +44,7 @@ export interface DatabaseJobRow {
   id: string;
   customer_id: string;
   estimate_id: string | null;
+  purchase_order_number?: string | null;
   builder_id?: string | null;
   job_name: string;
   job_address: string | null;
@@ -72,12 +77,14 @@ export interface FrontendJobPhase {
   counts_toward_crew: boolean;
   scheduled_date: string;
   scheduled_time: string;
+  end_time?: string;
   crew_id: string;
   work_order_number: string;
   day_capacity_used: number;
   estimated_duration: number;
   status: string;
   notes: string;
+  last_reschedule_reason?: string;
 }
 
 export interface FrontendJob {
@@ -105,6 +112,7 @@ export interface FrontendJob {
   work_order_number: string;
   status: string;
   notes: string;
+  last_reschedule_reason?: string;
   created_from: "estimate" | "builder";
   phases: FrontendJobPhase[];
 }
@@ -198,13 +206,37 @@ function buildUnscheduledBuilderPhases() {
     counts_toward_crew: phaseTemplate.counts_toward_crew,
     scheduled_date: "",
     scheduled_time: "",
+    end_time: "",
     crew_id: "",
     work_order_number: "",
     day_capacity_used: phaseTemplate.counts_toward_crew ? (phaseTemplate.key === "pour_slab" ? 1 : 0.5) : 0,
     estimated_duration: phaseTemplate.counts_toward_crew ? (phaseTemplate.key === "pour_slab" ? 1 : 0.5) : 0,
     status: "Ready to Schedule",
     notes: "",
+    last_reschedule_reason: "",
   }));
+}
+
+function buildScheduledBuilderPhase(event: DatabaseJobScheduleEventRow) {
+  const phaseKey = toUiBuilderPhaseKey(event.builder_step) || "other";
+  return {
+    id: event.id,
+    scheduleEventDatabaseId: event.id,
+    phase_key: phaseKey,
+    phase_label: getSchedulePhaseLabel(phaseKey),
+    responsible_party: getResponsibleParty(phaseKey),
+    counts_toward_crew: getCountsTowardCrew(phaseKey, event.crew_id),
+    scheduled_date: event.scheduled_date,
+    scheduled_time: normalizeTimeValue(event.start_time),
+    end_time: normalizeTimeValue(event.end_time),
+    crew_id: event.crew_id || "",
+    work_order_number: event.work_order_number || "",
+    day_capacity_used: getCountsTowardCrew(phaseKey, event.crew_id) ? 1 : 0,
+    estimated_duration: 1,
+    status: databaseStatusToCalendarStatus(event.status),
+    notes: event.notes || "",
+    last_reschedule_reason: event.last_reschedule_reason || "",
+  };
 }
 
 function buildBuilderPhases(events: DatabaseJobScheduleEventRow[]) {
@@ -212,22 +244,26 @@ function buildBuilderPhases(events: DatabaseJobScheduleEventRow[]) {
     return buildUnscheduledBuilderPhases();
   }
 
-  return sortBuilderPhases(events.map((event) => ({
-    id: event.id,
-    scheduleEventDatabaseId: event.id,
-    phase_key: event.builder_step || "other",
-    phase_label: getSchedulePhaseLabel(event.builder_step),
-    responsible_party: getResponsibleParty(event.builder_step),
-    counts_toward_crew: getCountsTowardCrew(event.builder_step, event.crew_id),
-    scheduled_date: event.scheduled_date,
-    scheduled_time: normalizeTimeValue(event.start_time),
-    crew_id: event.crew_id || "",
-    work_order_number: event.work_order_number || "",
-    day_capacity_used: getCountsTowardCrew(event.builder_step, event.crew_id) ? 1 : 0,
-    estimated_duration: 1,
-    status: databaseStatusToCalendarStatus(event.status),
-    notes: event.notes || "",
-  })));
+  const scheduledPhases = sortBuilderPhases(events.map(buildScheduledBuilderPhase));
+  const templatePhaseKeys = new Set(BUILDER_PHASES.map((phase) => phase.key));
+  const scheduledByKey = new Map<string, FrontendJobPhase>();
+  const extraScheduledPhases: FrontendJobPhase[] = [];
+
+  scheduledPhases.forEach((phase) => {
+    if (templatePhaseKeys.has(phase.phase_key) && !scheduledByKey.has(phase.phase_key)) {
+      scheduledByKey.set(phase.phase_key, phase);
+      return;
+    }
+
+    extraScheduledPhases.push(phase);
+  });
+
+  const mergedStandardPhases = buildUnscheduledBuilderPhases().map((phase) => ({
+    ...phase,
+    ...(scheduledByKey.get(phase.phase_key) || {}),
+  }));
+
+  return sortBuilderPhases([...mergedStandardPhases, ...extraScheduledPhases]);
 }
 
 function getResidentialStatus(row: DatabaseJobRow, events: DatabaseJobScheduleEventRow[]) {
@@ -291,9 +327,10 @@ function mapResidentialJob(row: DatabaseJobRow, events: DatabaseJobScheduleEvent
     estimated_duration: 1,
     day_capacity_used: primaryEvent?.crew_id ? 1 : 0,
     crew_id: primaryEvent?.crew_id || "",
-    work_order_number: primaryEvent?.work_order_number || "",
+    work_order_number: row.purchase_order_number || primaryEvent?.work_order_number || "",
     status: getResidentialStatus(row, events),
     notes: primaryEvent?.notes || row.notes || row.description || "",
+    last_reschedule_reason: primaryEvent?.last_reschedule_reason || "",
     created_from: "estimate",
     phases: [],
   };
@@ -330,6 +367,7 @@ function mapBuilderJob(row: DatabaseJobRow, events: DatabaseJobScheduleEventRow[
     work_order_number: nextPhase?.work_order_number || "",
     status: getBuilderStatus(row, phases),
     notes: row.notes || row.description || "",
+    last_reschedule_reason: nextPhase?.last_reschedule_reason || "",
     created_from: "builder",
     phases,
   };

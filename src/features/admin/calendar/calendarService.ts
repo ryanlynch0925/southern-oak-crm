@@ -8,6 +8,11 @@ interface SupabaseErrorSummary {
   hint?: string;
 }
 
+export interface ProfileDisplayNameRow {
+  id: string;
+  full_name: string | null;
+}
+
 export class ScheduleServiceError extends Error {
   supabaseError: SupabaseErrorSummary;
 
@@ -49,7 +54,7 @@ function throwScheduleServiceError(context: string, error: unknown): never {
   throw serviceError;
 }
 
-const SCHEDULE_SELECT = `
+const SCHEDULE_SELECT_WITH_PURCHASE_ORDER = `
   id,
   job_id,
   crew_id,
@@ -60,18 +65,77 @@ const SCHEDULE_SELECT = `
   builder_step,
   status,
   notes,
+  last_reschedule_reason,
+  last_rescheduled_at,
+  last_rescheduled_by,
   created_at,
   updated_at,
   job:jobs!schedule_events_job_id_fkey (
     id,
     customer_id,
     estimate_id,
+    builder_id,
+    purchase_order_number,
     job_name,
     job_address,
     job_type,
     status,
     description,
     notes,
+    community,
+    lot_number,
+    customer:customers!jobs_customer_id_fkey (
+      id,
+      first_name,
+      last_name,
+      company_name,
+      phone,
+      email,
+      street_address,
+      city,
+      state,
+      zip_code,
+      customer_type,
+      notes
+    )
+  ),
+  crew:crews!schedule_events_crew_id_fkey (
+    id,
+    crew_number,
+    crew_name,
+    lead_name
+  )
+`;
+
+const SCHEDULE_SELECT_LEGACY = `
+  id,
+  job_id,
+  crew_id,
+  scheduled_date,
+  start_time,
+  end_time,
+  work_order_number,
+  builder_step,
+  status,
+  notes,
+  last_reschedule_reason,
+  last_rescheduled_at,
+  last_rescheduled_by,
+  created_at,
+  updated_at,
+  job:jobs!schedule_events_job_id_fkey (
+    id,
+    customer_id,
+    estimate_id,
+    builder_id,
+    job_name,
+    job_address,
+    job_type,
+    status,
+    description,
+    notes,
+    community,
+    lot_number,
     customer:customers!jobs_customer_id_fkey (
       id,
       first_name,
@@ -99,47 +163,91 @@ function toScheduleRow(data: unknown) {
   return data as DatabaseScheduleEventRow;
 }
 
-export async function fetchScheduleEvents() {
-  const { data, error } = await supabase
-    .from("schedule_events")
-    .select(SCHEDULE_SELECT)
-    .order("scheduled_date", { ascending: true })
-    .order("start_time", { ascending: true });
+function isMissingPurchaseOrderNumberError(error: unknown) {
+  const summary = summarizeSupabaseError(error);
+  const text = `${summary.message || ""} ${summary.details || ""}`.toLowerCase();
+  return summary.code === "42703" && text.includes("purchase_order_number");
+}
 
-  if (error) {
-    throwScheduleServiceError("Unable to load calendar", error);
+async function fetchScheduleRowsWithFallback(eventId?: string) {
+  const runSelect = (selectClause: string) => {
+    const query = supabase
+      .from("schedule_events")
+      .select(selectClause);
+
+    if (eventId) {
+      return query.eq("id", eventId).single();
+    }
+
+    return query
+      .order("scheduled_date", { ascending: true })
+      .order("start_time", { ascending: true });
+  };
+
+  const purchaseOrderResponse = await runSelect(SCHEDULE_SELECT_WITH_PURCHASE_ORDER);
+
+  if (!purchaseOrderResponse.error) {
+    return purchaseOrderResponse.data;
   }
 
-  return (data || []).map(toScheduleRow);
+  if (!isMissingPurchaseOrderNumberError(purchaseOrderResponse.error)) {
+    throw purchaseOrderResponse.error;
+  }
+
+  const legacyResponse = await runSelect(SCHEDULE_SELECT_LEGACY);
+
+  if (legacyResponse.error) {
+    throw legacyResponse.error;
+  }
+
+  return legacyResponse.data;
+}
+
+export async function fetchScheduleEvents() {
+  try {
+    const data = await fetchScheduleRowsWithFallback();
+    return (data || []).map(toScheduleRow);
+  } catch (error) {
+    throwScheduleServiceError("Unable to load calendar", error);
+  }
+}
+
+async function fetchScheduleEventById(eventId: string) {
+  try {
+    const data = await fetchScheduleRowsWithFallback(eventId);
+    return toScheduleRow(data);
+  } catch (error) {
+    throwScheduleServiceError(`Unable to load calendar event ${eventId}`, error);
+  }
 }
 
 export async function createScheduleEvent(payload: ScheduleEventWritePayload) {
   const { data, error } = await supabase
     .from("schedule_events")
     .insert(payload)
-    .select(SCHEDULE_SELECT)
+    .select("id")
     .single();
 
   if (error) {
     throwScheduleServiceError("Unable to create calendar event", error);
   }
 
-  return toScheduleRow(data);
+  return fetchScheduleEventById(data.id);
 }
 
 export async function updateScheduleEvent(eventId: string, payload: ScheduleEventWritePayload) {
-  const { data, error } = await supabase
+  const { error } = await supabase
     .from("schedule_events")
     .update(payload)
     .eq("id", eventId)
-    .select(SCHEDULE_SELECT)
+    .select("id")
     .single();
 
   if (error) {
     throwScheduleServiceError(`Unable to update calendar event ${eventId}`, error);
   }
 
-  return toScheduleRow(data);
+  return fetchScheduleEventById(eventId);
 }
 
 export async function findJobIdByEstimateId(estimateId: string) {
@@ -154,4 +262,20 @@ export async function findJobIdByEstimateId(estimateId: string) {
   }
 
   return data?.id || null;
+}
+
+export async function fetchProfileDisplayNames(userIds: string[]) {
+  if (!Array.isArray(userIds) || userIds.length === 0) {
+    return [] as ProfileDisplayNameRow[];
+  }
+
+  const { data, error } = await supabase.rpc("get_profile_display_names", {
+    user_ids: userIds,
+  });
+
+  if (error) {
+    throwScheduleServiceError("Unable to load profile display names", error);
+  }
+
+  return (data || []) as ProfileDisplayNameRow[];
 }

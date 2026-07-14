@@ -12,6 +12,7 @@ import CrewsSection from "./features/admin/crews/CrewsSection";
 import { appCrewToDatabaseCrew, databaseCrewToAppCrew, normalizeCrew } from "./features/admin/crews/crewMappers";
 import { buildBuilderEvents, buildCalendarEvents, buildResidentialEvents, findCrewById, getCrewNumber } from "./features/admin/crews/crewUtils";
 import { useBuilders } from "./features/admin/hooks/useBuilders";
+import { useJobs } from "./features/admin/hooks/useJobs";
 import { useScheduleEvents } from "./features/admin/hooks/useScheduleEvents";
 import { Btn, Card, Modal } from "./features/admin/shared/AdminPrimitives";
 import { fmtDate, fmtMetricNumber, todayIso } from "./features/admin/shared/adminFormatters";
@@ -19,6 +20,7 @@ import { B, INP, labelStyle } from "./features/admin/shared/adminStyles";
 
 const BRAND_LOGO_SRC = `${import.meta.env.BASE_URL}branding/main_logo.png`;
 const RESIDENTIAL_EVENT_COLOR = "#6C3483";
+const ADMIN_SECTION_STORAGE_KEY = "southern-oak-admin-section";
 const ADMIN_SECTIONS = [
   { id: "dashboard", label: "Dashboard", icon: "ti-layout-dashboard" },
   { id: "tickets", label: "Estimate Tickets", icon: "ti-file-text" },
@@ -647,7 +649,7 @@ function EstimateTicketsSection({ tickets, ticketsLoading = false, ticketsError 
   const [statusFilter, setStatusFilter] = useState("All");
   const [decisionFilter, setDecisionFilter] = useState("All");
   const [sortBy, setSortBy] = useState("date");
-  const scheduledTicketIds = new Set(jobs.filter(job => job.sourceTicketId).map(job => job.sourceTicketId));
+  const scheduledTicketIds = new Set(jobs.filter(job => job.sourceTicketId && job.scheduled_date).map(job => job.sourceTicketId));
   const filtered = useMemo(() => {
     let list = tickets;
     if (statusFilter !== "All") list = list.filter(item => item.status === statusFilter);
@@ -1339,10 +1341,11 @@ function CalendarSection({ events, crews, onOpenJob, pendingResidentialDraft, on
   );
 }
 
-function JobsSection({ jobs, onSelectJob, onCreateBuilderJob, canCreateBuilderJob = true }) {
+function JobsSection({ jobs, loading = false, error = "", onSelectJob, onCreateBuilderJob, canCreateBuilderJob = true }) {
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState("All");
   const [statusFilter, setStatusFilter] = useState("All");
+  const [isDesktopLayout, setIsDesktopLayout] = useState(() => typeof window === "undefined" ? true : window.innerWidth >= 1180);
   const filtered = jobs.filter(job => {
     if (typeFilter !== "All" && job.schedule_type !== typeFilter) return false;
     if (statusFilter !== "All" && job.status !== statusFilter) return false;
@@ -1352,6 +1355,33 @@ function JobsSection({ jobs, onSelectJob, onCreateBuilderJob, canCreateBuilderJo
     }
     return true;
   });
+  const desktopColumns = "minmax(0,2.1fr) minmax(130px,1fr) minmax(110px,.95fr) minmax(150px,1.1fr) minmax(110px,.8fr) minmax(150px,.95fr) 120px";
+
+  useEffect(() => {
+    const handleResize = () => {
+      setIsDesktopLayout(window.innerWidth >= 1180);
+    };
+
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
+  const getNextScheduledPhase = job => sortBuilderPhases(job.phases || []).find(phase => phase.scheduled_date && !["Completed", "Cancelled"].includes(phase.status)) || null;
+  const getTaskLabel = job => {
+    if (job.schedule_type === "residential") {
+      return job.scheduled_date ? "Scheduled Work" : "-";
+    }
+
+    return getNextScheduledPhase(job)?.phase_label || "-";
+  };
+  const getScheduledLabel = job => {
+    if (job.schedule_type === "residential") {
+      return job.scheduled_date ? `${fmtDate(job.scheduled_date)} · ${job.scheduled_time || "-"}` : "-";
+    }
+
+    const nextPhase = getNextScheduledPhase(job);
+    return nextPhase?.scheduled_date ? `${fmtDate(nextPhase.scheduled_date)} · ${nextPhase.scheduled_time || "-"}` : "-";
+  };
 
   return (
     <>
@@ -1377,39 +1407,85 @@ function JobsSection({ jobs, onSelectJob, onCreateBuilderJob, canCreateBuilderJo
         </div>
       </Card>
 
+      {loading && (
+        <Card style={{ marginBottom: 14 }}>
+          <div style={{ fontSize: ".84rem", color: B.gray, fontWeight: 600 }}>Loading jobs...</div>
+        </Card>
+      )}
+
+      {!loading && error && (
+        <Card style={{ marginBottom: 14, background: "#FFF8E1", borderColor: "#E5D7A7" }}>
+          <div style={{ fontSize: ".84rem", color: "#8A6A12", fontWeight: 700 }}>Unable to load jobs.</div>
+          <div style={{ fontSize: ".78rem", color: B.gray, marginTop: 4 }}>{error}</div>
+        </Card>
+      )}
+
+      {!loading && !error && jobs.length === 0 && (
+        <Card style={{ marginBottom: 14 }}>
+          <div style={{ fontSize: ".84rem", color: B.gray, fontWeight: 600 }}>No jobs found.</div>
+        </Card>
+      )}
+
+      {!loading && !error && jobs.length > 0 && filtered.length === 0 && (
+        <Card style={{ marginBottom: 14 }}>
+          <div style={{ fontSize: ".84rem", color: B.gray, fontWeight: 600 }}>No jobs match the current filters.</div>
+        </Card>
+      )}
+
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-        {filtered.map(job => (
+        {!loading && !error && filtered.length > 0 && isDesktopLayout && (
+          <Card style={{ padding: "12px 16px" }}>
+            <div style={{ display: "grid", gridTemplateColumns: desktopColumns, gap: 12, alignItems: "center", paddingRight: 8 }}>
+              {["Job", "Job Type", "Task", "Date Scheduled", "Work Order", "Status", "Action"].map(label => (
+                <div key={label} style={{ fontSize: ".72rem", color: B.gray, fontWeight: 700, textTransform: "uppercase", letterSpacing: .5, textAlign: label === "Action" ? "right" : "left" }}>
+                  {label}
+                </div>
+              ))}
+            </div>
+          </Card>
+        )}
+        {!loading && !error && filtered.map(job => (
           <Card key={job.id} style={{ padding: 16 }}>
-            <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) auto", gap: 12, alignItems: "center" }}>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 10 }}>
-                <div>
-                  <div style={{ fontWeight: 700, fontSize: ".92rem", color: B.dark }}>{job.schedule_type === "residential" ? job.customer_name : `${job.builder_name} - Lot ${job.lot_number}`}</div>
-                  <div style={{ fontSize: ".74rem", color: B.gray }}>{job.schedule_type === "residential" ? job.job_address : `${job.community} - ${job.job_address}`}</div>
-                </div>
-                <div>
-                  <div style={{ fontSize: ".72rem", color: B.gray, marginBottom: 2 }}>Job type</div>
-                  <div style={{ fontSize: ".82rem", fontWeight: 700, color: B.mid }}>{job.schedule_type === "residential" ? job.job_type : "Builder Slab Workflow"}</div>
-                </div>
-                <div>
-                  <div style={{ fontSize: ".72rem", color: B.gray, marginBottom: 2 }}>Next scheduled work</div>
-                  <div style={{ fontSize: ".82rem", color: B.dark }}>
+            <div style={{ display: "grid", gridTemplateColumns: isDesktopLayout ? desktopColumns : "repeat(auto-fit,minmax(140px,1fr))", gap: 12, alignItems: "center", paddingRight: isDesktopLayout ? 8 : 0 }}>
+                <div style={{ minWidth: 0, gridColumn: isDesktopLayout ? "auto" : "span 2" }}>
+                  {!isDesktopLayout && <div style={{ fontSize: ".72rem", color: B.gray, marginBottom: 2 }}>Job</div>}
+                  <div style={{ fontWeight: 700, fontSize: ".92rem", color: B.dark }}>
                     {job.schedule_type === "residential"
-                      ? `${fmtDate(job.scheduled_date)} - ${job.scheduled_time || "-"}`
-                      : (() => {
-                        const nextPhase = sortBuilderPhases(job.phases || []).find(phase => !["Completed", "Cancelled"].includes(phase.status));
-                        return nextPhase ? `${nextPhase.phase_label} - ${fmtDate(nextPhase.scheduled_date)}${nextPhase.scheduled_time ? ` - ${nextPhase.scheduled_time}` : ""}` : "All phases complete";
-                      })()}
+                      ? job.customer_name
+                      : (job.lot_number ? `${job.builder_name} - Lot ${job.lot_number}` : (job.name || job.builder_name || "Builder Job"))}
+                  </div>
+                  <div style={{ fontSize: ".74rem", color: B.gray, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                    {job.schedule_type === "residential"
+                      ? job.job_address
+                      : [job.community, job.job_address].filter(Boolean).join(" - ") || job.job_address || job.community || "-"}
                   </div>
                 </div>
-                <div>
-                  <div style={{ fontSize: ".72rem", color: B.gray, marginBottom: 2 }}>Work order</div>
-                  <div style={{ fontSize: ".82rem", color: B.dark }}>{job.work_order_number || "-"}</div>
+                <div style={{ minWidth: 0 }}>
+                  {!isDesktopLayout && <div style={{ fontSize: ".72rem", color: B.gray, marginBottom: 2 }}>Job Type</div>}
+                  <div style={{ fontSize: ".82rem", fontWeight: 700, color: B.mid, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{job.schedule_type === "residential" ? job.job_type : "Builder Slab Workflow"}</div>
                 </div>
-              </div>
-              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
-                <Pill status={job.status} />
-                <Btn sm v="outline" onClick={() => onSelectJob(job.id)}>Open job</Btn>
-              </div>
+                <div style={{ minWidth: 0 }}>
+                  {!isDesktopLayout && <div style={{ fontSize: ".72rem", color: B.gray, marginBottom: 2 }}>Task</div>}
+                  <div style={{ fontSize: ".82rem", color: B.dark, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{getTaskLabel(job)}</div>
+                </div>
+                <div style={{ minWidth: 0 }}>
+                  {!isDesktopLayout && <div style={{ fontSize: ".72rem", color: B.gray, marginBottom: 2 }}>Date Scheduled</div>}
+                  <div style={{ fontSize: ".82rem", color: B.dark, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{getScheduledLabel(job)}</div>
+                </div>
+                <div style={{ minWidth: 0 }}>
+                  {!isDesktopLayout && <div style={{ fontSize: ".72rem", color: B.gray, marginBottom: 2 }}>Work Order</div>}
+                  <div style={{ fontSize: ".82rem", color: B.dark, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{job.work_order_number || "-"}</div>
+                </div>
+                <div style={{ minWidth: 0 }}>
+                  {!isDesktopLayout && <div style={{ fontSize: ".72rem", color: B.gray, marginBottom: 2 }}>Status</div>}
+                  <div style={{ minHeight: 28, display: "flex", alignItems: "center" }}>
+                    <Pill status={job.status} />
+                  </div>
+                </div>
+                <div style={{ minWidth: 0, justifySelf: "end", textAlign: "right" }}>
+                  {!isDesktopLayout && <div style={{ fontSize: ".72rem", color: B.gray, marginBottom: 2, textAlign: "right" }}>Action</div>}
+                  <Btn sm v="outline" onClick={() => onSelectJob(job.id)}>Open job</Btn>
+                </div>
             </div>
           </Card>
         ))}
@@ -1469,6 +1545,7 @@ function SettingsSection({ settings, onUpdateSettings, historyCounts }) {
 
 function JobDetailView({ job, crews, onBack, onSaveJob, onOpenPhaseEdit, readOnly = false }) {
   const crew = findCrewById(crews, job.crew_id);
+  const builderHeading = [job.builder_name, job.community, job.lot_number ? `Lot ${job.lot_number}` : ""].filter(Boolean).join(" - ") || job.name || "Builder Job";
   return (
     <div style={{ minHeight: "100vh", background: "#F4F6F3" }}>
       <div style={{ background: B.dark, padding: "0 16px" }}>
@@ -1483,7 +1560,7 @@ function JobDetailView({ job, crews, onBack, onSaveJob, onOpenPhaseEdit, readOnl
         <Card style={{ marginBottom: 16 }}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
             <div>
-              <h1 style={{ fontSize: "1.2rem", fontWeight: 700, color: B.dark, marginBottom: 4 }}>{job.schedule_type === "residential" ? job.customer_name : [job.builder_name, job.community, job.lot_number ? `Lot ${job.lot_number}` : ""].filter(Boolean).join(" - ")}</h1>
+              <h1 style={{ fontSize: "1.2rem", fontWeight: 700, color: B.dark, marginBottom: 4 }}>{job.schedule_type === "residential" ? job.customer_name : builderHeading}</h1>
               <div style={{ fontSize: ".82rem", color: B.gray }}>{job.job_address}</div>
             </div>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
@@ -1791,15 +1868,29 @@ const tdStyle = { padding: "10px", borderBottom: "1px solid #F1EEE7", fontSize: 
 export default function AdminWorkspace({ appRole, tickets, ticketsLoading = false, ticketsError = "", onUpdateTicket, onLogout, setPage }) {
   const allowedSections = useMemo(() => getAllowedAdminSections(appRole), [appRole]);
   const defaultSection = getDefaultAdminSection(appRole);
-  const [section, setSection] = useState(defaultSection);
+  const [section, setSection] = useState(() => {
+    const savedSection = typeof window !== "undefined"
+      ? window.sessionStorage.getItem(ADMIN_SECTION_STORAGE_KEY)
+      : "";
+    return savedSection || defaultSection;
+  });
   const [selectedTicketId, setSelectedTicketId] = useState(null);
   const [selectedJobId, setSelectedJobId] = useState(null);
   const [selectedCalendarJobId, setSelectedCalendarJobId] = useState(null);
-  const [jobs, setJobs] = useState(() => buildDefaultJobs().map(normalizeBuilderJob));
   const [crews, setCrews] = useState([]);
+  const jobsAccessEnabled = appRole !== "field";
   const builderAccessEnabled = hasFullAccess(appRole) || appRole === "office";
   const { builders, buildersLoading, buildersError, createBuilder, getBuilderCreateError } = useBuilders(builderAccessEnabled);
   const {
+    jobs,
+    loading: jobsLoading,
+    error: jobsError,
+    refreshJobs,
+    updateJob: updateStoredJob,
+    createBuilderJob: createStoredBuilderJob,
+  } = useJobs(jobsAccessEnabled, builders);
+  const {
+    rows: scheduleRows,
     events: scheduleEvents,
     calendarJobs,
     loading: scheduleLoading,
@@ -1841,8 +1932,29 @@ export default function AdminWorkspace({ appRole, tickets, ticketsLoading = fals
       setSelectedTicketId(null);
       setSelectedJobId(null);
       setSelectedCalendarJobId(null);
+
+      if (typeof window !== "undefined") {
+        window.sessionStorage.setItem(ADMIN_SECTION_STORAGE_KEY, defaultSection);
+      }
     }
   }, [allowedSections, defaultSection, section]);
+
+  useEffect(() => {
+    if (!allowedSections.some(item => item.id === section)) return;
+
+    if (typeof window !== "undefined") {
+      window.sessionStorage.setItem(ADMIN_SECTION_STORAGE_KEY, section);
+    }
+  }, [allowedSections, section]);
+
+  useEffect(() => {
+    if (!jobsAccessEnabled) return;
+    void refreshJobs();
+  }, [
+    jobsAccessEnabled,
+    refreshJobs,
+    scheduleRows.map(row => `${row.id}:${row.updated_at || row.created_at}`).join("|"),
+  ]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1958,6 +2070,9 @@ export default function AdminWorkspace({ appRole, tickets, ticketsLoading = fals
     };
     try {
       await onUpdateTicket(updated);
+      if (status === "Estimate Accepted" || status === "Scheduled") {
+        void refreshJobs();
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unable to update estimate status.";
       console.error("Unable to update estimate status:", error);
@@ -1998,14 +2113,42 @@ export default function AdminWorkspace({ appRole, tickets, ticketsLoading = fals
     setSection("calendar");
   };
 
-  const openResidentialReschedule = job => {
+  const openResidentialRescheduleFromCalendarJob = job => {
     if (!canManageSchedule) return;
     setBuilderScheduleDraft(null);
     setResidentialDraft({
       job_id: job.id,
-      job_database_id: job.job_database_id || "",
-      databaseId: job.databaseId || "",
-      return_section: job.databaseId ? "calendar" : "jobs",
+      job_database_id: job.job_database_id || job.databaseId || "",
+      scheduleEventDatabaseId: job.databaseId || "",
+      return_section: "calendar",
+      customer_name: job.customer_name,
+      estimateTicketId: job.sourceTicketId || "",
+      estimateDatabaseId: job.estimate_database_id || "",
+      job_type: job.job_type,
+      job_address: job.job_address,
+      scheduled_date: job.scheduled_date || firstWorkingDate(plusDays(todayIso(), 1)),
+      scheduled_time: job.scheduled_time || "07:00",
+      estimated_duration: job.estimated_duration || 1,
+      day_capacity_used: job.day_capacity_used || 1,
+      crew_id: job.crew_id || crews[0]?.id || "",
+      work_order_number: job.work_order_number || "",
+      status: job.status || "Scheduled",
+      notes: job.notes || "",
+      charge_weekend_fee: !!job.charge_weekend_fee,
+    });
+    setSelectedJobId(null);
+    setSelectedCalendarJobId(null);
+    setSection("calendar");
+  };
+
+  const openResidentialRescheduleFromJob = job => {
+    if (!canManageSchedule) return;
+    setBuilderScheduleDraft(null);
+    setResidentialDraft({
+      job_id: job.id,
+      job_database_id: job.databaseId || "",
+      scheduleEventDatabaseId: job.scheduleEventDatabaseId || "",
+      return_section: job.scheduleEventDatabaseId ? "calendar" : "jobs",
       customer_name: job.customer_name,
       estimateTicketId: job.sourceTicketId || "",
       estimateDatabaseId: job.estimate_database_id || "",
@@ -2071,8 +2214,8 @@ export default function AdminWorkspace({ appRole, tickets, ticketsLoading = fals
       notes: draft.notes,
     };
     const candidateEvents = buildResidentialEvents(calendarUpdated);
-    const existingCalendarEvents = draft.databaseId
-      ? scheduleEvents.filter(event => event.databaseId !== draft.databaseId)
+    const existingCalendarEvents = draft.scheduleEventDatabaseId
+      ? scheduleEvents.filter(event => event.databaseId !== draft.scheduleEventDatabaseId)
       : scheduleEvents;
     const conflicts = detectCrewConflicts({
       candidateEvents,
@@ -2092,9 +2235,9 @@ export default function AdminWorkspace({ appRole, tickets, ticketsLoading = fals
       return;
     }
 
-    if (draft.databaseId) {
+    if (draft.scheduleEventDatabaseId) {
       try {
-        await updateScheduleEvent(draft.databaseId, {
+        await updateScheduleEvent(draft.scheduleEventDatabaseId, {
           crew_id: draft.crew_id || null,
           scheduled_date: draft.scheduled_date,
           start_time: draft.scheduled_time || null,
@@ -2106,6 +2249,7 @@ export default function AdminWorkspace({ appRole, tickets, ticketsLoading = fals
         if (conflictOverrideReason) {
           setOverrideHistory(prev => [{ id: `ovr-${Date.now()}`, jobId: draft.job_database_id || draft.job_id, note: conflictOverrideReason, createdAt: new Date().toISOString() }, ...prev]);
         }
+        void refreshJobs();
         setResidentialDraft(null);
         setSelectedCalendarJobId(null);
         setSection(draft.return_section || "calendar");
@@ -2154,6 +2298,7 @@ export default function AdminWorkspace({ appRole, tickets, ticketsLoading = fals
       if (conflictOverrideReason) {
         setOverrideHistory(prev => [{ id: `ovr-${Date.now()}`, jobId, note: conflictOverrideReason, createdAt: new Date().toISOString() }, ...prev]);
       }
+      void refreshJobs();
       setResidentialDraft(null);
       setSelectedJobId(null);
       setSection(draft.return_section || "tickets");
@@ -2162,24 +2307,37 @@ export default function AdminWorkspace({ appRole, tickets, ticketsLoading = fals
     }
   };
 
-  const createBuilderJob = draft => {
-    const job = buildBuilderJobFromDraft(draft, builders);
-    setResidentialDraft(null);
-    setJobs(prev => [job, ...prev]);
-    setBuilderScheduleDraft({
-      job_id: job.id,
-      builder_name: job.builder_name,
-      community: job.community,
-      lot_number: job.lot_number,
-      scheduled_date: firstWorkingDate(plusDays(todayIso(), 1)),
-      scheduled_time: "07:00",
-      crew_id: job.crew_id || crews[0]?.id || "",
-      notes: job.notes || "",
-      charge_weekend_fee: false,
-    });
-    setBuilderDraft(null);
-    setSelectedJobId(null);
-    setSection("calendar");
+  const createBuilderJob = async draft => {
+    const builder = builders.find(item => item.id === draft.builder_id);
+
+    if (!builder?.databaseId) {
+      window.alert("The selected builder is missing its database ID, so this builder job cannot be created.");
+      return;
+    }
+
+    try {
+      const savedJob = await createStoredBuilderJob({
+        builder: {
+          id: builder.id,
+          databaseId: builder.databaseId,
+          name: builder.name,
+          phone: builder.phone,
+          color: builder.color,
+        },
+        community: draft.community,
+        lotNumber: draft.lot_number,
+        jobAddress: draft.job_address,
+        notes: draft.notes,
+      });
+      setBuilderDraft(null);
+      setSelectedCalendarJobId(null);
+      setSelectedTicketId(null);
+      setSelectedJobId(savedJob.id);
+      setSection("jobs");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to create builder job.";
+      window.alert(message);
+    }
   };
 
   const saveBuilderSchedule = draft => {
@@ -2190,65 +2348,7 @@ export default function AdminWorkspace({ appRole, tickets, ticketsLoading = fals
       window.alert("This builder workflow does not have a matching database job record yet, so it cannot be written to Supabase schedule_events in this phase.");
       return;
     }
-    if (isSunday(draft.scheduled_date)) {
-      blockSundaySchedule("Builder jobs");
-      return;
-    }
-    if (isSaturday(draft.scheduled_date) && settings.skipWeekendsByDefault && !draft.weekend_override) {
-      if (!settings.allowWeekendOverride) {
-        window.alert("Saturday scheduling requires an override, and weekend overrides are currently disabled.");
-        return;
-      }
-      setWeekendOverrideState({
-        defaultCrewId: draft.crew_id,
-        message: `${draft.builder_name} Lot ${draft.lot_number} is being scheduled on Saturday, ${fmtDate(draft.scheduled_date)}.`,
-        onConfirm: override => {
-          setWeekendOverrideState(null);
-          saveBuilderSchedule({ ...draft, crew_id: override.crew_id, charge_weekend_fee: override.charge_weekend_fee, weekend_override: true });
-        },
-        onCancel: () => setWeekendOverrideState(null),
-      });
-      return;
-    }
-    const current = jobs.find(job => job.id === draft.job_id);
-    if (!current) return;
-    const currentPhases = sortBuilderPhases(current.phases || []);
-    const updated = {
-      ...current,
-      scheduled_date: draft.scheduled_date,
-      scheduled_time: draft.scheduled_time,
-      crew_id: draft.crew_id,
-      status: "Scheduled",
-      charge_weekend_fee: !!draft.charge_weekend_fee,
-      phases: currentPhases.map((phase, idx) => ({
-        ...phase,
-        scheduled_date: idx === 0 ? draft.scheduled_date : nextWorkingDate(draft.scheduled_date, idx),
-        scheduled_time: draft.scheduled_time || "07:00",
-        crew_id: phase.counts_toward_crew ? draft.crew_id : phase.crew_id,
-        status: idx === 0 ? "Scheduled" : "Ready to Schedule",
-        charge_weekend_fee: !!draft.charge_weekend_fee,
-      })),
-    };
-    const candidateEvents = buildBuilderEvents(updated);
-    const conflicts = detectCrewConflicts({ candidateEvents, jobs, crews, ignoreEventIds: buildBuilderEvents(current).map(event => event.id) });
-    if (conflicts.length) {
-      setConflictState({
-        conflicts,
-        defaultCrewId: draft.crew_id,
-        reopen: () => setBuilderScheduleDraft(draft),
-        onReassign: newCrewId => saveBuilderSchedule({ ...draft, crew_id: newCrewId }),
-        onOverride: note => {
-          setOverrideHistory(prev => [{ id: `ovr-${Date.now()}`, jobId: draft.job_id, note, createdAt: new Date().toISOString() }, ...prev]);
-          setJobs(prev => prev.map(job => job.id === updated.id ? { ...updated, conflict_override_reason: note } : job));
-          setBuilderScheduleDraft(null);
-        },
-        onCancel: () => setBuilderScheduleDraft(null),
-      });
-      setBuilderScheduleDraft(null);
-      return;
-    }
-    setJobs(prev => prev.map(job => job.id === updated.id ? updated : job));
-    setScheduleHistory(prev => [{ id: `sch-${Date.now()}`, type: "builder-start", jobId: draft.job_id, note: `Scheduled builder workflow start for ${draft.scheduled_date}` }, ...prev]);
+    window.alert("Builder scheduling from the Jobs flow is not enabled in this phase unless the workflow is already backed by schedule_events.");
     setBuilderScheduleDraft(null);
   };
 
@@ -2257,7 +2357,7 @@ export default function AdminWorkspace({ appRole, tickets, ticketsLoading = fals
     const calendarJob = findCalendarJob(jobId);
     if (calendarJob) {
       if (calendarJob.schedule_type === "residential") {
-        openResidentialReschedule(calendarJob);
+        openResidentialRescheduleFromCalendarJob(calendarJob);
         return;
       }
 
@@ -2265,6 +2365,7 @@ export default function AdminWorkspace({ appRole, tickets, ticketsLoading = fals
       if (!phase) return;
       setPhaseDraft({
         ...phase,
+        scheduleEventDatabaseId: phase.databaseId || "",
         job_id: calendarJob.id,
         job_database_id: calendarJob.job_database_id,
         phase_id: phase.id,
@@ -2276,13 +2377,14 @@ export default function AdminWorkspace({ appRole, tickets, ticketsLoading = fals
     const job = jobs.find(item => item.id === jobId);
     if (!job) return;
     if (job.schedule_type === "residential") {
-      openResidentialReschedule(job);
+      openResidentialRescheduleFromJob(job);
       return;
     }
     const phase = sortBuilderPhases(job.phases || []).find(item => item.id === phaseId);
     if (!phase) return;
     setPhaseDraft({
       ...phase,
+      scheduleEventDatabaseId: phase.scheduleEventDatabaseId || "",
       job_id: job.id,
       phase_id: phase.id,
       isResidential: false,
@@ -2291,44 +2393,18 @@ export default function AdminWorkspace({ appRole, tickets, ticketsLoading = fals
 
   const saveResidentialReschedule = (draft, overrideReason = "") => {
     if (!canManageSchedule) return;
-    setJobs(prev => prev.map(job => {
-      if (job.id !== draft.job_id) return job;
-      const updated = {
-        ...job,
-        scheduled_date: draft.scheduled_date,
-        scheduled_time: draft.scheduled_time,
-        crew_id: draft.crew_id,
-        status: draft.status,
-        day_capacity_used: Number(draft.day_capacity_used || job.day_capacity_used),
-        notes: draft.notes,
-        conflict_override_reason: overrideReason || job.conflict_override_reason || "",
-      };
-      const candidateEvents = buildResidentialEvents(updated);
-      const conflicts = detectCrewConflicts({ candidateEvents, jobs: prev.filter(item => item.id !== job.id), crews });
-      if (conflicts.length && !overrideReason) {
-        setConflictState({
-          conflicts,
-          defaultCrewId: draft.crew_id,
-          reopen: () => setPhaseDraft(draft),
-          onReassign: newCrewId => saveResidentialReschedule({ ...draft, crew_id: newCrewId }, ""),
-          onOverride: note => saveResidentialReschedule({ ...draft }, note),
-          onCancel: () => setPhaseDraft(null),
-        });
-        setPhaseDraft(null);
-        return job;
-      }
-      setScheduleHistory(history => [{ id: `sch-${Date.now()}`, type: "residential-reschedule", jobId: updated.id, note: `Rescheduled ${updated.customer_name} to ${updated.scheduled_date}` }, ...history]);
-      if (overrideReason) setOverrideHistory(history => [{ id: `ovr-${Date.now()}`, jobId: updated.id, note: overrideReason, createdAt: new Date().toISOString() }, ...history]);
-      setPhaseDraft(null);
-      return updated;
-    }));
+    setPhaseDraft(null);
+    void saveResidentialSchedule({ ...draft, return_section: draft.return_section || "jobs" }, overrideReason);
   };
 
   const saveBuilderPhase = (draft, overrideReason = "") => {
     if (!canManageSchedule) return;
     const calendarJob = findCalendarJob(draft.job_id);
     if (calendarJob) {
-      const sortedPhases = sortBuilderPhases(calendarJob.phases || []);
+      const sortedPhases = sortBuilderPhases(calendarJob.phases || []).map(phase => ({
+        ...phase,
+        scheduleEventDatabaseId: phase.scheduleEventDatabaseId || phase.databaseId || "",
+      }));
       const phaseIndex = sortedPhases.findIndex(phase => phase.id === draft.phase_id);
       if (phaseIndex < 0) return;
       const previousPhase = sortedPhases[phaseIndex - 1];
@@ -2368,7 +2444,7 @@ export default function AdminWorkspace({ appRole, tickets, ticketsLoading = fals
         }
         const updatedJob = { ...calendarJob, phases: updatedPhases, databaseBacked: true };
         const candidateEvents = buildBuilderEvents(updatedJob);
-        const ignoreEventIds = sortedPhases.map(phase => phase.databaseId);
+        const ignoreEventIds = sortedPhases.map(phase => phase.scheduleEventDatabaseId);
         const conflicts = detectCrewConflicts({
           candidateEvents,
           existingEvents: scheduleEvents.filter(event => !ignoreEventIds.includes(event.databaseId)),
@@ -2403,7 +2479,7 @@ export default function AdminWorkspace({ appRole, tickets, ticketsLoading = fals
         phases: sortedPhases.map((phase, idx) => idx === phaseIndex ? { ...phase, ...draft, conflict_override_reason: overrideReason } : { ...phase }),
       };
       const candidateEvents = buildBuilderEvents(updatedJob);
-      const ignoreEventIds = sortedPhases.map(phase => phase.databaseId);
+      const ignoreEventIds = sortedPhases.map(phase => phase.scheduleEventDatabaseId);
       const conflicts = detectCrewConflicts({
         candidateEvents,
         existingEvents: scheduleEvents.filter(event => !ignoreEventIds.includes(event.databaseId)),
@@ -2422,7 +2498,7 @@ export default function AdminWorkspace({ appRole, tickets, ticketsLoading = fals
         return;
       }
 
-      void updateScheduleEvent(draft.databaseId, {
+      void updateScheduleEvent(draft.scheduleEventDatabaseId, {
         crew_id: draft.crew_id || null,
         scheduled_date: draft.scheduled_date,
         start_time: draft.scheduled_time || null,
@@ -2435,6 +2511,7 @@ export default function AdminWorkspace({ appRole, tickets, ticketsLoading = fals
         if (overrideReason) {
           setOverrideHistory(prev => [{ id: `ovr-${Date.now()}`, jobId: calendarJob.job_database_id, note: overrideReason, createdAt: new Date().toISOString() }, ...prev]);
         }
+        void refreshJobs();
         setPhaseDraft(null);
       }).catch(error => {
         showScheduleWriteError("update the builder schedule", error);
@@ -2442,97 +2519,8 @@ export default function AdminWorkspace({ appRole, tickets, ticketsLoading = fals
       return;
     }
 
-    const job = jobs.find(item => item.id === draft.job_id);
-    if (!job) return;
-    const sortedPhases = sortBuilderPhases(job.phases || []);
-    const phaseIndex = sortedPhases.findIndex(phase => phase.id === draft.phase_id);
-    if (phaseIndex < 0) return;
-    const previousPhase = sortedPhases[phaseIndex - 1];
-    if (previousPhase?.scheduled_date && draft.scheduled_date && draft.scheduled_date < previousPhase.scheduled_date) {
-      window.alert(`${draft.phase_label} cannot be scheduled before ${previousPhase.phase_label}.`);
-      return;
-    }
-    if (draft.scheduled_date && isSunday(draft.scheduled_date)) {
-      blockSundaySchedule(draft.phase_label);
-      return;
-    }
-    if (draft.scheduled_date && isSaturday(draft.scheduled_date) && settings.skipWeekendsByDefault && !draft.weekend_override) {
-      if (!settings.allowWeekendOverride) {
-        window.alert("Saturday scheduling requires an override, and weekend overrides are currently disabled.");
-        return;
-      }
-      setWeekendOverrideState({
-        defaultCrewId: draft.crew_id,
-        message: `${draft.phase_label} is being scheduled on Saturday, ${fmtDate(draft.scheduled_date)}.`,
-        onConfirm: override => {
-          setWeekendOverrideState(null);
-          saveBuilderPhase({ ...draft, crew_id: override.crew_id, charge_weekend_fee: override.charge_weekend_fee, weekend_override: true }, overrideReason);
-        },
-        onCancel: () => setWeekendOverrideState(null),
-      });
-      return;
-    }
-
-    const existingPhase = sortedPhases[phaseIndex];
-    const willPushForward = existingPhase.scheduled_date && draft.scheduled_date && draft.scheduled_date > existingPhase.scheduled_date && phaseIndex < sortedPhases.length - 1;
-    if (willPushForward) {
-      const updatedPhases = sortedPhases.map((phase, idx) => idx === phaseIndex ? { ...phase, ...draft, conflict_override_reason: overrideReason } : { ...phase });
-      let cursor = draft.scheduled_date;
-      for (let idx = phaseIndex + 1; idx < updatedPhases.length; idx += 1) {
-        cursor = nextWorkingDate(cursor, 1);
-        updatedPhases[idx] = { ...updatedPhases[idx], scheduled_date: cursor };
-      }
-      const updatedJob = { ...job, phases: updatedPhases };
-      const candidateEvents = buildBuilderEvents(updatedJob);
-      const ignoreEventIds = buildBuilderEvents(job).map(event => event.id);
-      const conflicts = detectCrewConflicts({ candidateEvents, jobs, crews, ignoreEventIds });
-      const summary = updatedPhases.slice(phaseIndex).map(phase => {
-        const original = sortedPhases.find(item => item.id === phase.id);
-        const phaseConflict = conflicts.find(conflict => conflict.candidate.phaseId === phase.id);
-        return {
-          phaseId: phase.id,
-          phase_label: phase.phase_label,
-          original_date: original?.scheduled_date || "",
-          new_date: phase.scheduled_date,
-          crew_label: phase.crew_id ? `Crew ${findCrewById(crews, phase.crew_id)?.number || "-"}` : "-",
-          conflict: !!phaseConflict,
-        };
-      });
-      setPushPreview({
-        jobId: job.id,
-        updatedJob,
-        conflicts,
-        summary,
-        overrideReason,
-      });
-      setPhaseDraft(null);
-      return;
-    }
-
-    const updatedJob = {
-      ...job,
-      phases: sortedPhases.map((phase, idx) => idx === phaseIndex ? { ...phase, ...draft, conflict_override_reason: overrideReason } : { ...phase }),
-    };
-    const candidateEvents = buildBuilderEvents(updatedJob);
-    const ignoreEventIds = buildBuilderEvents(job).map(event => event.id);
-    const conflicts = detectCrewConflicts({ candidateEvents, jobs, crews, ignoreEventIds });
-    if (conflicts.length && !overrideReason) {
-      setConflictState({
-        conflicts,
-        defaultCrewId: draft.crew_id,
-        reopen: () => setPhaseDraft(draft),
-        onReassign: newCrewId => saveBuilderPhase({ ...draft, crew_id: newCrewId }, ""),
-        onOverride: note => saveBuilderPhase({ ...draft }, note),
-        onCancel: () => setPhaseDraft(null),
-      });
-      setPhaseDraft(null);
-      return;
-    }
-
-    setJobs(prev => prev.map(item => item.id === updatedJob.id ? updatedJob : item));
-    setScheduleHistory(prev => [{ id: `sch-${Date.now()}`, type: "builder-phase", jobId: updatedJob.id, note: `Updated ${draft.phase_label} to ${draft.scheduled_date}` }, ...prev]);
-    if (overrideReason) setOverrideHistory(prev => [{ id: `ovr-${Date.now()}`, jobId: updatedJob.id, note: overrideReason, createdAt: new Date().toISOString() }, ...prev]);
     setPhaseDraft(null);
+    window.alert("This builder workflow does not have schedule_events-backed phases yet, so phase editing cannot be persisted in this phase.");
   };
 
   const applyPushPreview = (overrideReason = "") => {
@@ -2558,7 +2546,7 @@ export default function AdminWorkspace({ appRole, tickets, ticketsLoading = fals
       }
 
       Promise.all(
-        (pushPreview.updatedJob.phases || []).map(phase => updateScheduleEvent(phase.databaseId, {
+        (pushPreview.updatedJob.phases || []).map(phase => updateScheduleEvent(phase.scheduleEventDatabaseId, {
           crew_id: phase.crew_id || null,
           scheduled_date: phase.scheduled_date,
           start_time: phase.scheduled_time || null,
@@ -2572,41 +2560,20 @@ export default function AdminWorkspace({ appRole, tickets, ticketsLoading = fals
         if (overrideReason) {
           setOverrideHistory(prev => [{ id: `ovr-${Date.now()}`, jobId: pushPreview.updatedJob.job_database_id, note: overrideReason, createdAt: new Date().toISOString() }, ...prev]);
         }
+        void refreshJobs();
         setPushPreview(null);
       }).catch(error => {
         showScheduleWriteError("apply the builder schedule push", error);
       });
       return;
     }
-    if (pushPreview.conflicts.length && !overrideReason) {
-      setConflictState({
-        conflicts: pushPreview.conflicts,
-        defaultCrewId: pushPreview.updatedJob.crew_id,
-        reopen: () => {},
-        onReassign: newCrewId => {
-          const revised = JSON.parse(JSON.stringify(pushPreview.updatedJob));
-          revised.phases = revised.phases.map(phase => phase.counts_toward_crew ? { ...phase, crew_id: newCrewId } : phase);
-          setPushPreview({ ...pushPreview, updatedJob: revised, conflicts: [] });
-          setConflictState(null);
-          setJobs(prev => prev.map(job => job.id === revised.id ? revised : job));
-          setScheduleHistory(prev => [{ id: `sch-${Date.now()}`, type: "builder-push", jobId: revised.id, note: "Builder phases pushed with reassigned crew." }, ...prev]);
-          setPushPreview(null);
-        },
-        onOverride: note => applyPushPreview(note),
-        onCancel: () => { setPushPreview(null); },
-      });
-      setPushPreview(null);
-      return;
-    }
-    setJobs(prev => prev.map(job => job.id === pushPreview.updatedJob.id ? { ...pushPreview.updatedJob, conflict_override_reason: overrideReason || job.conflict_override_reason || "" } : job));
-    setScheduleHistory(prev => [{ id: `sch-${Date.now()}`, type: "builder-push", jobId: pushPreview.updatedJob.id, note: "Builder phases shifted forward in order." }, ...prev]);
-    if (overrideReason) setOverrideHistory(prev => [{ id: `ovr-${Date.now()}`, jobId: pushPreview.updatedJob.id, note: overrideReason, createdAt: new Date().toISOString() }, ...prev]);
+    window.alert("This builder schedule push cannot be persisted until the workflow is backed by schedule_events.");
     setPushPreview(null);
   };
 
   const content = (() => {
     if (selectedTicket) {
-      const sourceJob = jobs.find(job => job.sourceTicketId === selectedTicket.id) || null;
+      const sourceJob = jobs.find(job => job.sourceTicketId === selectedTicket.id && job.scheduled_date) || null;
       return <TicketDetailView ticket={selectedTicket} onBack={() => setSelectedTicketId(null)} onUpdateTicket={updateTicket} onOpenSchedule={openResidentialSchedule} sourceJob={sourceJob} />;
     }
     if (selectedCalendarJob) {
@@ -2621,6 +2588,7 @@ export default function AdminWorkspace({ appRole, tickets, ticketsLoading = fals
               status: calendarStatusToDatabaseStatus(job.status),
             }).then(() => {
               setScheduleHistory(prev => [{ id: `sch-${Date.now()}`, type: "residential-status", jobId: job.job_database_id || job.id, note: `Updated job status to ${job.status}` }, ...prev]);
+              void refreshJobs();
             }).catch(error => {
               showScheduleWriteError("update the calendar status", error);
             });
@@ -2631,12 +2599,44 @@ export default function AdminWorkspace({ appRole, tickets, ticketsLoading = fals
       );
     }
     if (selectedJob) {
-      return <JobDetailView job={selectedJob} crews={crews} onBack={() => setSelectedJobId(null)} onSaveJob={job => { if (canManageSchedule) setJobs(prev => prev.map(item => item.id === job.id ? job : item)); }} onOpenPhaseEdit={openPhaseEdit} readOnly={calendarReadOnly} />;
+      return <JobDetailView job={selectedJob} crews={crews} onBack={() => setSelectedJobId(null)} onSaveJob={job => {
+        if (!canManageSchedule) return;
+        if (job.schedule_type === "residential" && job.scheduleEventDatabaseId) {
+          void updateScheduleEvent(job.scheduleEventDatabaseId, {
+            status: calendarStatusToDatabaseStatus(job.status),
+          }).then(() => {
+            setScheduleHistory(prev => [{ id: `sch-${Date.now()}`, type: "residential-status", jobId: job.databaseId || job.id, note: `Updated job status to ${job.status}` }, ...prev]);
+            void refreshJobs();
+          }).catch(error => {
+            showScheduleWriteError("update the calendar status", error);
+          });
+          return;
+        }
+
+        void updateStoredJob(job.databaseId || job.id, {
+          status: job.status === "Completed"
+            ? "completed"
+            : job.status === "Delayed"
+              ? "delayed"
+              : job.status === "In Progress"
+                ? "in_progress"
+                : job.status === "Cancelled"
+                  ? "cancelled"
+                  : job.status === "Scheduled"
+                    ? "scheduled"
+                    : "unscheduled",
+          notes: job.notes || null,
+        }).then(() => {
+          void refreshJobs();
+        }).catch(error => {
+          showScheduleWriteError("update the job", error);
+        });
+      }} onOpenPhaseEdit={openPhaseEdit} readOnly={calendarReadOnly} />;
     }
     if (section === "dashboard") return <DashboardHomeSection tickets={tickets} jobs={jobs} events={allEvents} conflicts={activeConflicts} setSection={setSection} />;
     if (section === "tickets") return <EstimateTicketsSection tickets={tickets} ticketsLoading={ticketsLoading} ticketsError={ticketsError} onSelectTicket={ticket => setSelectedTicketId(ticket.id)} onAcceptTicket={ticket => applyTicketStatus(ticket, "Estimate Accepted", "Estimate accepted and ready for office scheduling.")} onScheduleTicket={openResidentialSchedule} jobs={jobs} scheduledEstimateDatabaseIds={scheduledEstimateDatabaseIds} />;
     if (section === "calendar") return <CalendarSection events={scheduleEvents} crews={crews} onOpenJob={jobId => setSelectedCalendarJobId(jobId)} pendingResidentialDraft={canManageSchedule ? residentialDraft : null} onPendingResidentialDraftChange={setResidentialDraft} onSavePendingResidentialSchedule={saveResidentialSchedule} onCancelPendingResidentialSchedule={() => setResidentialDraft(null)} pendingBuilderSchedule={canManageSchedule ? builderScheduleDraft : null} onPendingBuilderScheduleChange={setBuilderScheduleDraft} onSavePendingBuilderSchedule={saveBuilderSchedule} onCancelPendingBuilderSchedule={() => setBuilderScheduleDraft(null)} readOnly={calendarReadOnly} loading={scheduleLoading} error={scheduleError} />;
-    if (section === "jobs") return <JobsSection jobs={jobs} onSelectJob={jobId => setSelectedJobId(jobId)} onCreateBuilderJob={openBuilderJobModal} canCreateBuilderJob={canManageSchedule} />;
+    if (section === "jobs") return <JobsSection jobs={jobs} loading={jobsLoading} error={jobsError} onSelectJob={jobId => setSelectedJobId(jobId)} onCreateBuilderJob={openBuilderJobModal} canCreateBuilderJob={canManageSchedule} />;
     if (section === "crews") return <CrewsSection crews={crews} jobs={jobs} onCreateCrew={createCrew} onUpdateCrew={updateCrew} />;
     if (section === "builders") return <BuildersSection builders={builders} buildersLoading={buildersLoading} buildersError={buildersError} jobs={jobs} onCreateBuilderJob={openBuilderJobModal} onCreateBuilder={() => setBuilderRecordDraft({ name: "", contact: "", phone: "", communities: "" })} onOpenJob={jobId => setSelectedJobId(jobId)} />;
     if (section === "finance") return <FinanceDashboard financeView={financeView} onFinanceViewChange={setFinanceView} />;

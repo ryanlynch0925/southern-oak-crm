@@ -4,7 +4,10 @@ import { fmtDate } from "../shared/adminFormatters";
 import { sortBuilderPhases } from "./builderUtils";
 export default function BuildersSection({ builders, jobs, onCreateBuilderJob, onCreateBuilder, onOpenJob, buildersLoading = false, buildersError = "" }) {
   const builderSummaries = builders.map(builder => {
-    const builderJobs = jobs.filter(job => job.builder_id === builder.id);
+    const builderJobs = jobs.filter(job => (
+      job.builder_id === builder.id
+      || (!job.builder_id && !!job.builder_name && job.builder_name.trim().toLowerCase() === builder.name.trim().toLowerCase())
+    ));
     const openJobs = builderJobs.filter(job => !["Completed", "Cancelled"].includes(job.status)).length;
     const nextPour = builderJobs.flatMap(job => sortBuilderPhases(job.phases || [])).find(phase => phase.phase_key === "pour_slab" && phase.scheduled_date);
     return { builder, builderJobs, openJobs, nextPour };
@@ -58,7 +61,11 @@ export default function BuildersSection({ builders, jobs, onCreateBuilderJob, on
               {builderJobs.length === 0 && <div style={{ fontSize: ".74rem", color: B.gray }}>No jobs yet.</div>}
               {builderJobs.map(job => (
                 <button key={job.id} onClick={() => onOpenJob(job.id)} style={{ textAlign: "left", background: B.sand, border: "1px solid var(--color-border-tertiary)", borderRadius: 6, padding: "8px 10px", cursor: "pointer", fontFamily: "inherit" }}>
-                  <div style={{ fontSize: ".76rem", fontWeight: 700, color: B.dark }}>{job.community} - Lot {job.lot_number}</div>
+                  <div style={{ fontSize: ".76rem", fontWeight: 700, color: B.dark }}>
+                    {job.community || job.lot_number
+                      ? `${job.community || job.builder_name} - ${job.lot_number ? `Lot ${job.lot_number}` : job.name}`
+                      : job.name}
+                  </div>
                   <div style={{ fontSize: ".72rem", color: B.gray }}>{job.work_order_number || "No work order"} - {job.status}</div>
                 </button>
               ))}

@@ -27,6 +27,7 @@ export default function App() {
   const [appRole, setAppRole] = useState<AppRole | null>(null);
   const [roleLoading, setRoleLoading] = useState(false);
   const [roleError, setRoleError] = useState("");
+  const sessionUserId = session?.user?.id || null;
   const {
     tickets,
     loading: ticketsLoading,
@@ -64,13 +65,19 @@ export default function App() {
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(
-      (_event, nextSession) => {
+      (event, nextSession) => {
         if (!mounted) {
           return;
         }
 
         setSession(nextSession);
         setAuthLoading(false);
+
+        if (event === "SIGNED_OUT") {
+          setAppRole(null);
+          setRoleError("");
+          setRoleLoading(false);
+        }
       }
     );
 
@@ -84,7 +91,7 @@ export default function App() {
     let cancelled = false;
 
     const loadRole = async () => {
-      if (!session) {
+      if (!sessionUserId) {
         setAppRole(null);
         setRoleError("");
         setRoleLoading(false);
@@ -97,7 +104,7 @@ export default function App() {
       const { data, error } = await supabase
         .from("profiles")
         .select("role")
-        .eq("id", session.user.id)
+        .eq("id", sessionUserId)
         .maybeSingle();
 
       if (cancelled) return;
@@ -126,7 +133,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [session]);
+  }, [sessionUserId]);
 
   const handleTicketSubmit = (ticket: Ticket) => {
     addTicket(ticket);

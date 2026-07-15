@@ -12,9 +12,24 @@ export interface AdminCustomerRecord {
   state: string | null;
   zip_code: string | null;
   customer_type: string | null;
+  is_active: boolean;
   notes: string | null;
   created_at: string | null;
   updated_at: string | null;
+}
+
+export interface CustomerUpdatePatch {
+  first_name?: string | null;
+  last_name?: string | null;
+  company_name?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  street_address?: string | null;
+  city?: string | null;
+  state?: string | null;
+  zip_code?: string | null;
+  customer_type?: string | null;
+  notes?: string | null;
 }
 
 interface SupabaseErrorSummary {
@@ -77,6 +92,7 @@ const CUSTOMER_SELECT = `
   state,
   zip_code,
   customer_type,
+  is_active,
   notes,
   created_at,
   updated_at
@@ -201,6 +217,81 @@ export function buildCustomerSearchText(customer: AdminCustomerRecord) {
     .toLowerCase();
 }
 
+function normalizeRequiredCustomerText(value: string | null | undefined) {
+  if (typeof value !== "string") {
+    return value;
+  }
+
+  return value.trim();
+}
+
+function normalizeOptionalCustomerText(value: string | null | undefined) {
+  if (typeof value !== "string") {
+    return value ?? null;
+  }
+
+  const trimmedValue = value.trim();
+  return trimmedValue || null;
+}
+
+function normalizeCustomerTypeValue(value: string | null | undefined) {
+  if (typeof value !== "string") {
+    return value;
+  }
+
+  return value.trim().toLowerCase();
+}
+
+function sanitizeCustomerUpdatePatch(patch: CustomerUpdatePatch) {
+  const sanitizedPatch: Record<string, string | null> = {};
+
+  if ("first_name" in patch) {
+    sanitizedPatch.first_name = normalizeRequiredCustomerText(patch.first_name) ?? "";
+  }
+
+  if ("last_name" in patch) {
+    sanitizedPatch.last_name = normalizeOptionalCustomerText(patch.last_name);
+  }
+
+  if ("company_name" in patch) {
+    sanitizedPatch.company_name = normalizeOptionalCustomerText(patch.company_name);
+  }
+
+  if ("phone" in patch) {
+    sanitizedPatch.phone = normalizeOptionalCustomerText(patch.phone);
+  }
+
+  if ("email" in patch) {
+    sanitizedPatch.email = normalizeOptionalCustomerText(patch.email);
+  }
+
+  if ("street_address" in patch) {
+    sanitizedPatch.street_address = normalizeOptionalCustomerText(patch.street_address);
+  }
+
+  if ("city" in patch) {
+    sanitizedPatch.city = normalizeOptionalCustomerText(patch.city);
+  }
+
+  if ("state" in patch) {
+    sanitizedPatch.state = normalizeOptionalCustomerText(patch.state);
+  }
+
+  if ("zip_code" in patch) {
+    sanitizedPatch.zip_code = normalizeOptionalCustomerText(patch.zip_code);
+  }
+
+  if ("customer_type" in patch) {
+    sanitizedPatch.customer_type = normalizeCustomerTypeValue(patch.customer_type) ?? "";
+  }
+
+  if ("notes" in patch) {
+    sanitizedPatch.notes = normalizeOptionalCustomerText(patch.notes);
+  }
+
+  return sanitizedPatch;
+}
+
 export async function fetchCustomers(): Promise<AdminCustomerRecord[]> {
   const { data, error } = await supabase
     .from("customers")
@@ -212,4 +303,40 @@ export async function fetchCustomers(): Promise<AdminCustomerRecord[]> {
   }
 
   return (data || []) as AdminCustomerRecord[];
+}
+
+export async function updateCustomer(
+  customerId: string,
+  patch: CustomerUpdatePatch
+): Promise<AdminCustomerRecord> {
+  const { data, error } = await supabase
+    .from("customers")
+    .update(sanitizeCustomerUpdatePatch(patch))
+    .eq("id", customerId)
+    .select(CUSTOMER_SELECT)
+    .single();
+
+  if (error) {
+    throwCustomerServiceError(`Unable to update customer ${customerId}`, error);
+  }
+
+  return data as AdminCustomerRecord;
+}
+
+export async function setCustomerActive(
+  customerId: string,
+  isActive: boolean
+): Promise<AdminCustomerRecord> {
+  const { data, error } = await supabase
+    .from("customers")
+    .update({ is_active: isActive })
+    .eq("id", customerId)
+    .select(CUSTOMER_SELECT)
+    .single();
+
+  if (error) {
+    throwCustomerServiceError(`Unable to update customer lifecycle ${customerId}`, error);
+  }
+
+  return data as AdminCustomerRecord;
 }

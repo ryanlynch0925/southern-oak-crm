@@ -91,6 +91,8 @@ const JOB_STATUSES = [
 ];
 
 const STATUS_STYLES = {
+  Active: { c: "#25603C", bg: "#E6F3EA" },
+  Inactive: { c: "#5F645D", bg: "#ECEEE9" },
   "New Request": { c: "#275A85", bg: "#E8F1FA" },
   "Needs Review": { c: "#7C6320", bg: "#F7F1DF" },
   "Rough Estimate Sent": { c: "#6A4D8E", bg: "#F1ECF8" },
@@ -113,6 +115,7 @@ const STATUS_STYLES = {
 };
 const YES_DECISION_STATUSES = new Set(["Interested", "Site Visit Requested"]);
 const NO_DECISION_STATUSES = new Set(["Follow Up Needed", "Declined"]);
+const CUSTOMER_EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const DECISION_STYLES = {
   yes: { label: "Yes / Interested", short: "Yes", c: "#25603C", bg: "#E6F3EA" },
   no: { label: "No / Follow Up Needed", short: "No", c: "#9C640C", bg: "#FCF3CF" },
@@ -301,6 +304,52 @@ function Logo({ sm = false }) {
 function Pill({ status, label }) {
   const cfg = STATUS_STYLES[status] || { c: "#555", bg: "#eee" };
   return <span style={{ display: "inline-block", padding: "3px 10px", borderRadius: 20, background: cfg.bg, color: cfg.c, fontWeight: 700, fontSize: ".68rem", whiteSpace: "nowrap" }}>{label || status}</span>;
+}
+
+function getCustomerStatusLabel(customer) {
+  return customer?.is_active === false ? "Inactive" : "Active";
+}
+
+function buildCustomerEditDraft(customer) {
+  return {
+    first_name: customer?.first_name || "",
+    last_name: customer?.last_name || "",
+    company_name: customer?.company_name || "",
+    phone: customer?.phone || "",
+    email: customer?.email || "",
+    street_address: customer?.street_address || "",
+    city: customer?.city || "",
+    state: customer?.state || "",
+    zip_code: customer?.zip_code || "",
+    customer_type: normalizeCustomerText(customer?.customer_type).toLowerCase() || "residential",
+    notes: customer?.notes || "",
+  };
+}
+
+function validateCustomerEditDraft(draft) {
+  const firstName = normalizeCustomerText(draft.first_name);
+  const lastName = normalizeCustomerText(draft.last_name);
+  const companyName = normalizeCustomerText(draft.company_name);
+  const email = normalizeCustomerText(draft.email);
+  const customerType = normalizeCustomerText(draft.customer_type).toLowerCase() || "residential";
+
+  if (!["residential", "builder", "commercial"].includes(customerType)) {
+    return "Choose a valid customer type.";
+  }
+
+  if (!firstName && !lastName && !companyName) {
+    return "Enter at least a first name, last name, or company name.";
+  }
+
+  if (customerType === "residential" && !firstName) {
+    return "Residential customers require a first name.";
+  }
+
+  if (email && !CUSTOMER_EMAIL_PATTERN.test(email)) {
+    return "Enter a valid email address.";
+  }
+
+  return "";
 }
 
 function DecisionPill({ ticket, short = false }) {
@@ -1588,9 +1637,20 @@ function JobsSection({ jobs, loading = false, error = "", onSelectJob, onCreateB
   );
 }
 
-function CustomersSection({ customers, loading = false, error = "", tickets, jobs, onSelectCustomer }) {
-  const [search, setSearch] = useState("");
-  const [typeFilter, setTypeFilter] = useState("All");
+function CustomersSection({
+  customers,
+  loading = false,
+  error = "",
+  tickets,
+  jobs,
+  onSelectCustomer,
+  search,
+  onSearchChange,
+  typeFilter,
+  onTypeFilterChange,
+  statusFilter,
+  onStatusFilterChange,
+}) {
   const [isDesktopLayout, setIsDesktopLayout] = useState(() => typeof window === "undefined" ? true : window.innerWidth >= 1180);
   const customerCounts = useMemo(() => {
     const estimateCounts = new Map();
@@ -1617,14 +1677,19 @@ function CustomersSection({ customers, loading = false, error = "", tickets, job
         return false;
       }
 
+      const normalizedStatus = customer.is_active === false ? "inactive" : "active";
+      if (statusFilter !== "All" && normalizedStatus !== statusFilter) {
+        return false;
+      }
+
       if (!normalizedQuery) {
         return true;
       }
 
       return buildCustomerSearchText(customer).includes(normalizedQuery);
     });
-  }, [customers, search, typeFilter]);
-  const desktopColumns = "minmax(0,2fr) minmax(120px,.8fr) minmax(130px,1fr) minmax(180px,1.2fr) minmax(120px,.8fr) minmax(90px,.65fr) minmax(80px,.55fr) 120px";
+  }, [customers, search, statusFilter, typeFilter]);
+  const desktopColumns = "minmax(0,2fr) minmax(120px,.8fr) minmax(130px,1fr) minmax(180px,1.2fr) minmax(120px,.8fr) minmax(90px,.65fr) minmax(80px,.55fr) minmax(110px,.75fr) 120px";
 
   useEffect(() => {
     const handleResize = () => {
@@ -1643,16 +1708,23 @@ function CustomersSection({ customers, loading = false, error = "", tickets, job
             <h1 style={{ fontSize: "1.25rem", fontWeight: 700, color: B.dark, marginBottom: 4 }}>Customers</h1>
             <p style={{ fontSize: ".8rem", color: B.gray }}>Browse customer records, filter by type, and review related estimates and jobs without leaving the admin workspace.</p>
           </div>
-          <select value={typeFilter} onChange={e => setTypeFilter(e.target.value)} style={{ ...INP, width: "auto", cursor: "pointer" }}>
-            <option value="All">All customer types</option>
-            <option value="residential">Residential</option>
-            <option value="builder">Builder</option>
-            <option value="commercial">Commercial</option>
-          </select>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+            <select value={typeFilter} onChange={e => onTypeFilterChange(e.target.value)} style={{ ...INP, width: "auto", cursor: "pointer" }}>
+              <option value="All">All customer types</option>
+              <option value="residential">Residential</option>
+              <option value="builder">Builder</option>
+              <option value="commercial">Commercial</option>
+            </select>
+            <select value={statusFilter} onChange={e => onStatusFilterChange(e.target.value)} style={{ ...INP, width: "auto", cursor: "pointer" }}>
+              <option value="All">All statuses</option>
+              <option value="active">Active</option>
+              <option value="inactive">Inactive</option>
+            </select>
+          </div>
         </div>
         <div style={{ marginTop: 12, position: "relative" }}>
           <i className="ti ti-search" style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", fontSize: 15, color: B.lgray }} aria-hidden="true" />
-          <input style={{ ...INP, paddingLeft: 32 }} value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name, company, phone, email, or address..." />
+          <input style={{ ...INP, paddingLeft: 32 }} value={search} onChange={e => onSearchChange(e.target.value)} placeholder="Search name, company, phone, email, or address..." />
         </div>
       </Card>
 
@@ -1685,7 +1757,7 @@ function CustomersSection({ customers, loading = false, error = "", tickets, job
         {!loading && !error && filtered.length > 0 && isDesktopLayout && (
           <Card style={{ padding: "12px 16px" }}>
             <div style={{ display: "grid", gridTemplateColumns: desktopColumns, gap: 12, alignItems: "center", paddingRight: 8 }}>
-              {["Customer", "Type", "Phone", "Email", "City", "Estimates", "Jobs", "Action"].map(label => (
+              {["Customer", "Type", "Phone", "Email", "City", "Estimates", "Jobs", "Status", "Action"].map(label => (
                 <div key={label} style={{ fontSize: ".72rem", color: B.gray, fontWeight: 700, textTransform: "uppercase", letterSpacing: .5, textAlign: label === "Action" ? "right" : "left" }}>
                   {label}
                 </div>
@@ -1743,6 +1815,10 @@ function CustomersSection({ customers, loading = false, error = "", tickets, job
                   {!isDesktopLayout && <div style={{ fontSize: ".72rem", color: B.gray, marginBottom: 2 }}>Jobs</div>}
                   <div style={{ fontSize: ".82rem", color: B.dark }}>{jobCount}</div>
                 </div>
+                <div style={{ minWidth: 0 }}>
+                  {!isDesktopLayout && <div style={{ fontSize: ".72rem", color: B.gray, marginBottom: 2 }}>Status</div>}
+                  <Pill status={getCustomerStatusLabel(customer)} />
+                </div>
                 <div style={{ minWidth: 0, justifySelf: "end", textAlign: "right" }}>
                   {!isDesktopLayout && <div style={{ fontSize: ".72rem", color: B.gray, marginBottom: 2, textAlign: "right" }}>Action</div>}
                   <Btn sm v="outline" onClick={() => onSelectCustomer(customer.id)}>View Details</Btn>
@@ -1756,7 +1832,20 @@ function CustomersSection({ customers, loading = false, error = "", tickets, job
   );
 }
 
-function CustomerDetailView({ customer, tickets, jobs, onBack, onOpenEstimate, onOpenJob }) {
+function CustomerDetailView({
+  customer,
+  tickets,
+  jobs,
+  onBack,
+  onOpenEstimate,
+  onOpenJob,
+  onEditCustomer,
+  onDeactivateCustomer,
+  onReactivateCustomer,
+  canManageCustomer = false,
+  customerActionBusy = false,
+  customerActionError = "",
+}) {
   const phoneLink = formatCustomerPhoneLink(customer.phone);
   const emailLink = formatCustomerEmailLink(customer.email);
   const relatedTickets = useMemo(
@@ -1791,10 +1880,26 @@ function CustomerDetailView({ customer, tickets, jobs, onBack, onOpenEstimate, o
               <div style={{ fontSize: ".82rem", color: B.gray }}>{formatCustomerLocation(customer)}</div>
             </div>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              <Pill status={getCustomerStatusLabel(customer)} />
               <span style={{ fontSize: ".78rem", color: B.gray }}>{relatedTickets.length} estimate{relatedTickets.length === 1 ? "" : "s"}</span>
               <span style={{ fontSize: ".78rem", color: B.gray }}>{relatedJobs.length} job{relatedJobs.length === 1 ? "" : "s"}</span>
+              {canManageCustomer && (
+                <>
+                  <Btn sm v="outline" onClick={onEditCustomer} disabled={customerActionBusy}>Edit Customer</Btn>
+                  {customer.is_active !== false ? (
+                    <Btn sm v="danger" onClick={onDeactivateCustomer} disabled={customerActionBusy}>Deactivate Customer</Btn>
+                  ) : (
+                    <Btn sm v="green" onClick={onReactivateCustomer} disabled={customerActionBusy}>Reactivate Customer</Btn>
+                  )}
+                </>
+              )}
             </div>
           </div>
+          {!!customerActionError && (
+            <div style={{ marginTop: 12, fontSize: ".78rem", color: "#8A6A12", fontWeight: 700 }}>
+              {customerActionError}
+            </div>
+          )}
         </Card>
 
         <div style={{ display: "grid", gridTemplateColumns: "1.05fr .95fr", gap: 16, alignItems: "start" }}>
@@ -1803,6 +1908,7 @@ function CustomerDetailView({ customer, tickets, jobs, onBack, onOpenEstimate, o
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 12 }}>
               {[
                 ["Display name", displayName],
+                ["Status", <Pill status={getCustomerStatusLabel(customer)} />],
                 ["Customer type", formatCustomerTypeLabel(customer.customer_type)],
                 ["First name", formatDisplayField(customer.first_name)],
                 ["Last name", formatDisplayField(customer.last_name)],
@@ -1906,6 +2012,113 @@ function CustomerDetailView({ customer, tickets, jobs, onBack, onOpenEstimate, o
         </Card>
       </div>
     </div>
+  );
+}
+
+function CustomerEditModal({ customer, saving = false, error = "", onClose, onSave }) {
+  const [local, setLocal] = useState(() => buildCustomerEditDraft(customer));
+  const [validationError, setValidationError] = useState("");
+
+  useEffect(() => {
+    setLocal(buildCustomerEditDraft(customer));
+    setValidationError("");
+  }, [customer]);
+
+  const submit = () => {
+    const nextValidationError = validateCustomerEditDraft(local);
+    if (nextValidationError) {
+      setValidationError(nextValidationError);
+      return;
+    }
+
+    setValidationError("");
+    onSave(local);
+  };
+
+  return (
+    <Modal title="Edit Customer" onClose={onClose} width={760}>
+      {(validationError || error) && (
+        <div style={{ marginBottom: 14, padding: "10px 12px", borderRadius: 10, background: "#FFF8E1", border: "1px solid #E5D7A7", fontSize: ".8rem", color: "#8A6A12", fontWeight: 700 }}>
+          {validationError || error}
+        </div>
+      )}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 12 }}>
+        <div>
+          <label style={labelStyle}>First Name</label>
+          <input style={INP} value={local.first_name} onChange={e => setLocal(prev => ({ ...prev, first_name: e.target.value }))} />
+        </div>
+        <div>
+          <label style={labelStyle}>Last Name</label>
+          <input style={INP} value={local.last_name} onChange={e => setLocal(prev => ({ ...prev, last_name: e.target.value }))} />
+        </div>
+        <div>
+          <label style={labelStyle}>Company Name</label>
+          <input style={INP} value={local.company_name} onChange={e => setLocal(prev => ({ ...prev, company_name: e.target.value }))} />
+        </div>
+        <div>
+          <label style={labelStyle}>Customer Type</label>
+          <select style={{ ...INP, cursor: "pointer" }} value={local.customer_type} onChange={e => setLocal(prev => ({ ...prev, customer_type: e.target.value }))}>
+            <option value="residential">Residential</option>
+            <option value="builder">Builder</option>
+            <option value="commercial">Commercial</option>
+          </select>
+        </div>
+        <div>
+          <label style={labelStyle}>Phone</label>
+          <input style={INP} value={local.phone} onChange={e => setLocal(prev => ({ ...prev, phone: e.target.value }))} />
+        </div>
+        <div>
+          <label style={labelStyle}>Email</label>
+          <input style={INP} value={local.email} onChange={e => setLocal(prev => ({ ...prev, email: e.target.value }))} />
+        </div>
+        <div style={{ gridColumn: "1 / -1" }}>
+          <label style={labelStyle}>Street Address</label>
+          <input style={INP} value={local.street_address} onChange={e => setLocal(prev => ({ ...prev, street_address: e.target.value }))} />
+        </div>
+        <div>
+          <label style={labelStyle}>City</label>
+          <input style={INP} value={local.city} onChange={e => setLocal(prev => ({ ...prev, city: e.target.value }))} />
+        </div>
+        <div>
+          <label style={labelStyle}>State</label>
+          <input style={INP} value={local.state} onChange={e => setLocal(prev => ({ ...prev, state: e.target.value }))} />
+        </div>
+        <div>
+          <label style={labelStyle}>Zip Code</label>
+          <input style={INP} value={local.zip_code} onChange={e => setLocal(prev => ({ ...prev, zip_code: e.target.value }))} />
+        </div>
+        <div style={{ gridColumn: "1 / -1" }}>
+          <label style={labelStyle}>Notes</label>
+          <textarea style={{ ...INP, minHeight: 96 }} value={local.notes} onChange={e => setLocal(prev => ({ ...prev, notes: e.target.value }))} />
+        </div>
+      </div>
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 18, flexWrap: "wrap" }}>
+        <Btn v="outline" onClick={onClose} disabled={saving}>Cancel</Btn>
+        <Btn v="green" onClick={submit} disabled={saving}>{saving ? "Saving..." : "Save Customer"}</Btn>
+      </div>
+    </Modal>
+  );
+}
+
+function CustomerDeactivateModal({ customer, saving = false, error = "", onClose, onConfirm }) {
+  return (
+    <Modal title="Deactivate Customer" onClose={onClose} width={560}>
+      <div style={{ fontSize: ".84rem", color: B.mid, lineHeight: 1.6 }}>
+        This customer will remain linked to all estimates and jobs. They can be reactivated later.
+      </div>
+      <div style={{ marginTop: 8, fontSize: ".78rem", color: B.gray }}>
+        {formatCustomerDisplayName(customer)}
+      </div>
+      {!!error && (
+        <div style={{ marginTop: 14, padding: "10px 12px", borderRadius: 10, background: "#FFF8E1", border: "1px solid #E5D7A7", fontSize: ".8rem", color: "#8A6A12", fontWeight: 700 }}>
+          {error}
+        </div>
+      )}
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 18, flexWrap: "wrap" }}>
+        <Btn v="outline" onClick={onClose} disabled={saving}>Cancel</Btn>
+        <Btn v="danger" onClick={onConfirm} disabled={saving}>{saving ? "Deactivating..." : "Deactivate Customer"}</Btn>
+      </div>
+    </Modal>
   );
 }
 
@@ -2566,6 +2779,8 @@ export default function AdminWorkspace({ appRole, tickets, ticketsLoading = fals
     customers,
     loading: customersLoading,
     error: customersError,
+    updateCustomer: updateStoredCustomer,
+    setCustomerActive: setStoredCustomerActive,
   } = useCustomers(customersAccessEnabled);
   const {
     jobs,
@@ -2596,6 +2811,15 @@ export default function AdminWorkspace({ appRole, tickets, ticketsLoading = fals
   const [builderWorkflowDraft, setBuilderWorkflowDraft] = useState(null);
   const [builderDraft, setBuilderDraft] = useState(null);
   const [builderRecordDraft, setBuilderRecordDraft] = useState(null);
+  const [customerEditOpen, setCustomerEditOpen] = useState(false);
+  const [customerEditSaving, setCustomerEditSaving] = useState(false);
+  const [customerEditError, setCustomerEditError] = useState("");
+  const [customerDeactivateOpen, setCustomerDeactivateOpen] = useState(false);
+  const [customerLifecycleSaving, setCustomerLifecycleSaving] = useState(false);
+  const [customerLifecycleError, setCustomerLifecycleError] = useState("");
+  const [customerSearch, setCustomerSearch] = useState("");
+  const [customerTypeFilter, setCustomerTypeFilter] = useState("All");
+  const [customerStatusFilter, setCustomerStatusFilter] = useState("All");
   const [phaseDraft, setPhaseDraft] = useState(null);
   const [phaseDetailState, setPhaseDetailState] = useState(null);
   const [pushPreview, setPushPreview] = useState(null);
@@ -2607,6 +2831,7 @@ export default function AdminWorkspace({ appRole, tickets, ticketsLoading = fals
 
   const selectedTicket = tickets.find(ticket => ticket.id === selectedTicketId) || null;
   const selectedCustomer = customers.find(customer => customer.id === selectedCustomerId) || null;
+  const canManageCustomers = customersAccessEnabled;
   const findLoadedResidentialScheduleRow = jobDatabaseId => {
     if (!jobDatabaseId) return null;
     return scheduleRows.find(row => row.job_id === jobDatabaseId && row.builder_step === "residential_job") || null;
@@ -2621,6 +2846,16 @@ export default function AdminWorkspace({ appRole, tickets, ticketsLoading = fals
     }
     return findLoadedResidentialScheduleRow(jobDatabaseId);
   };
+  useEffect(() => {
+    if (!selectedCustomer) {
+      setCustomerEditOpen(false);
+      setCustomerDeactivateOpen(false);
+      setCustomerEditSaving(false);
+      setCustomerLifecycleSaving(false);
+      setCustomerEditError("");
+      setCustomerLifecycleError("");
+    }
+  }, [selectedCustomer]);
   const hydrateResidentialJob = job => {
     if (!job || job.schedule_type !== "residential") {
       return job;
@@ -3813,6 +4048,75 @@ export default function AdminWorkspace({ appRole, tickets, ticketsLoading = fals
     setPushPreview(null);
   };
 
+  const openCustomerEdit = () => {
+    setCustomerEditError("");
+    setCustomerEditOpen(true);
+  };
+
+  const saveCustomerEdit = async draft => {
+    if (!selectedCustomer) return;
+
+    setCustomerEditSaving(true);
+    setCustomerEditError("");
+
+    try {
+      await updateStoredCustomer(selectedCustomer.id, {
+        first_name: draft.first_name,
+        last_name: draft.last_name,
+        company_name: draft.company_name,
+        phone: draft.phone,
+        email: draft.email,
+        street_address: draft.street_address,
+        city: draft.city,
+        state: draft.state,
+        zip_code: draft.zip_code,
+        customer_type: draft.customer_type,
+        notes: draft.notes,
+      });
+      setCustomerEditOpen(false);
+    } catch (error) {
+      setCustomerEditError(error instanceof Error ? error.message : "Unable to update customer.");
+    } finally {
+      setCustomerEditSaving(false);
+    }
+  };
+
+  const openDeactivateCustomer = () => {
+    setCustomerLifecycleError("");
+    setCustomerDeactivateOpen(true);
+  };
+
+  const confirmDeactivateCustomer = async () => {
+    if (!selectedCustomer) return;
+
+    setCustomerLifecycleSaving(true);
+    setCustomerLifecycleError("");
+
+    try {
+      await setStoredCustomerActive(selectedCustomer.id, false);
+      setCustomerDeactivateOpen(false);
+    } catch (error) {
+      setCustomerLifecycleError(error instanceof Error ? error.message : "Unable to deactivate customer.");
+    } finally {
+      setCustomerLifecycleSaving(false);
+    }
+  };
+
+  const reactivateCustomer = async () => {
+    if (!selectedCustomer) return;
+
+    setCustomerLifecycleSaving(true);
+    setCustomerLifecycleError("");
+
+    try {
+      await setStoredCustomerActive(selectedCustomer.id, true);
+    } catch (error) {
+      setCustomerLifecycleError(error instanceof Error ? error.message : "Unable to reactivate customer.");
+    } finally {
+      setCustomerLifecycleSaving(false);
+    }
+  };
+
   const content = (() => {
     if (selectedTicket) {
       const sourceJob = jobs.find(job => job.sourceTicketId === selectedTicket.id && job.scheduled_date) || null;
@@ -3885,6 +4189,12 @@ export default function AdminWorkspace({ appRole, tickets, ticketsLoading = fals
           tickets={tickets}
           jobs={jobs}
           onBack={() => setSelectedCustomerId(null)}
+          onEditCustomer={openCustomerEdit}
+          onDeactivateCustomer={openDeactivateCustomer}
+          onReactivateCustomer={reactivateCustomer}
+          canManageCustomer={canManageCustomers}
+          customerActionBusy={customerEditSaving || customerLifecycleSaving}
+          customerActionError={!customerDeactivateOpen ? customerLifecycleError : ""}
           onOpenEstimate={ticket => {
             setSelectedCustomerId(null);
             setSelectedTicketId(ticket.id);
@@ -3900,7 +4210,7 @@ export default function AdminWorkspace({ appRole, tickets, ticketsLoading = fals
     if (section === "tickets") return <EstimateTicketsSection tickets={tickets} ticketsLoading={ticketsLoading} ticketsError={ticketsError} onSelectTicket={ticket => setSelectedTicketId(ticket.id)} onAcceptTicket={ticket => applyTicketStatus(ticket, "Estimate Accepted", "Estimate accepted and ready for office scheduling.")} onScheduleTicket={openResidentialSchedule} jobs={jobs} scheduledEstimateDatabaseIds={scheduledEstimateDatabaseIds} />;
     if (section === "calendar") return <CalendarSection events={scheduleEvents} crews={crews} onOpenJob={jobId => setSelectedCalendarJobId(jobId)} pendingResidentialDraft={canManageSchedule ? residentialDraft : null} onPendingResidentialDraftChange={setResidentialDraft} onSavePendingResidentialSchedule={saveResidentialSchedule} onCancelPendingResidentialSchedule={() => setResidentialDraft(null)} pendingBuilderSchedule={canManageSchedule ? builderScheduleDraft : null} onPendingBuilderScheduleChange={setBuilderScheduleDraft} onSavePendingBuilderSchedule={saveBuilderSchedule} onCancelPendingBuilderSchedule={() => setBuilderScheduleDraft(null)} readOnly={calendarReadOnly} loading={scheduleLoading} error={scheduleError} />;
     if (section === "jobs") return <JobsSection jobs={jobs} loading={jobsLoading} error={jobsError} onSelectJob={jobId => setSelectedJobId(jobId)} onCreateBuilderJob={openBuilderJobModal} canCreateBuilderJob={canManageSchedule} />;
-    if (section === "customers") return <CustomersSection customers={customers} loading={customersLoading} error={customersError} tickets={tickets} jobs={jobs} onSelectCustomer={customerId => setSelectedCustomerId(customerId)} />;
+    if (section === "customers") return <CustomersSection customers={customers} loading={customersLoading} error={customersError} tickets={tickets} jobs={jobs} onSelectCustomer={customerId => setSelectedCustomerId(customerId)} search={customerSearch} onSearchChange={setCustomerSearch} typeFilter={customerTypeFilter} onTypeFilterChange={setCustomerTypeFilter} statusFilter={customerStatusFilter} onStatusFilterChange={setCustomerStatusFilter} />;
     if (section === "crews") return <CrewsSection crews={crews} jobs={jobs} onCreateCrew={createCrew} onUpdateCrew={updateCrew} />;
     if (section === "builders") return <BuildersSection builders={builders} buildersLoading={buildersLoading} buildersError={buildersError} jobs={jobs} onCreateBuilderJob={openBuilderJobModal} onCreateBuilder={() => setBuilderRecordDraft({ name: "", contact: "", phone: "", communities: "" })} onOpenJob={jobId => setSelectedJobId(jobId)} />;
     if (section === "finance") return <FinanceDashboard financeView={financeView} onFinanceViewChange={setFinanceView} />;
@@ -3943,6 +4253,32 @@ export default function AdminWorkspace({ appRole, tickets, ticketsLoading = fals
 
       {canManageSchedule && builderDraft && <BuilderJobModal draft={builderDraft} crews={crews} builders={builders} onClose={() => setBuilderDraft(null)} onSave={createBuilderJob} />}
       {hasFullAccess(appRole) && builderRecordDraft && <BuilderRecordModal draft={builderRecordDraft} onClose={() => setBuilderRecordDraft(null)} onSave={createBuilderRecord} />}
+      {selectedCustomer && customerEditOpen && (
+        <CustomerEditModal
+          customer={selectedCustomer}
+          saving={customerEditSaving}
+          error={customerEditError}
+          onClose={() => {
+            if (customerEditSaving) return;
+            setCustomerEditOpen(false);
+            setCustomerEditError("");
+          }}
+          onSave={saveCustomerEdit}
+        />
+      )}
+      {selectedCustomer && customerDeactivateOpen && (
+        <CustomerDeactivateModal
+          customer={selectedCustomer}
+          saving={customerLifecycleSaving}
+          error={customerLifecycleError}
+          onClose={() => {
+            if (customerLifecycleSaving) return;
+            setCustomerDeactivateOpen(false);
+            setCustomerLifecycleError("");
+          }}
+          onConfirm={confirmDeactivateCustomer}
+        />
+      )}
       {canManageSchedule && builderWorkflowDraft && <BuilderWorkflowScheduleModal draft={builderWorkflowDraft} crews={crews} onClose={() => setBuilderWorkflowDraft(null)} onSave={saveInitialBuilderWorkflow} />}
       {canManageSchedule && phaseDraft && <PhaseEditModal draft={phaseDraft} crews={crews} onClose={() => setPhaseDraft(null)} onSave={phaseDraft.isResidential ? saveResidentialReschedule : saveBuilderPhase} isResidential={phaseDraft.isResidential} />}
       {phaseDetailState && (

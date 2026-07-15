@@ -1,5 +1,25 @@
 import { useCallback, useEffect, useState } from "react";
-import { type AdminCustomerRecord, fetchCustomers } from "../customers/customerService";
+import {
+  type AdminCustomerRecord,
+  type CustomerUpdatePatch,
+  fetchCustomers,
+  setCustomerActive as setCustomerActiveInSupabase,
+  updateCustomer as updateCustomerInSupabase,
+} from "../customers/customerService";
+
+function sameCustomer(first: AdminCustomerRecord, second: AdminCustomerRecord) {
+  return first.id === second.id;
+}
+
+function mergeCustomerIntoList(nextCustomer: AdminCustomerRecord, customers: AdminCustomerRecord[]) {
+  const existingCustomerIndex = customers.findIndex((customer) => sameCustomer(customer, nextCustomer));
+
+  if (existingCustomerIndex < 0) {
+    return [nextCustomer, ...customers];
+  }
+
+  return customers.map((customer) => sameCustomer(customer, nextCustomer) ? nextCustomer : customer);
+}
 
 export function useCustomers(enabled: boolean) {
   const [customers, setCustomers] = useState<AdminCustomerRecord[]>([]);
@@ -34,10 +54,26 @@ export function useCustomers(enabled: boolean) {
     void refreshCustomers();
   }, [refreshCustomers]);
 
+  const updateCustomer = useCallback(async (customerId: string, patch: CustomerUpdatePatch) => {
+    const savedCustomer = await updateCustomerInSupabase(customerId, patch);
+    setCustomers((previousCustomers) => mergeCustomerIntoList(savedCustomer, previousCustomers));
+    setError("");
+    return savedCustomer;
+  }, []);
+
+  const setCustomerActive = useCallback(async (customerId: string, isActive: boolean) => {
+    const savedCustomer = await setCustomerActiveInSupabase(customerId, isActive);
+    setCustomers((previousCustomers) => mergeCustomerIntoList(savedCustomer, previousCustomers));
+    setError("");
+    return savedCustomer;
+  }, []);
+
   return {
     customers,
     loading,
     error,
     refreshCustomers,
+    updateCustomer,
+    setCustomerActive,
   };
 }

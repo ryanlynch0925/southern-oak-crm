@@ -216,6 +216,7 @@ export function databaseEstimateToTicket(estimate: DatabaseEstimateWithCustomer)
   return {
     id: displayTicketId(estimate.id),
     databaseId: estimate.id,
+    customerDatabaseId: estimate.customer_id,
     at: submittedAt,
     name: buildCustomerName(customer),
     phone: normalizeText(customer?.phone),

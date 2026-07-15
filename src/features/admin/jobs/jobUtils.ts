@@ -90,6 +90,7 @@ export interface FrontendJobPhase {
 export interface FrontendJob {
   id: string;
   databaseId: string;
+  customerDatabaseId?: string;
   scheduleEventDatabaseId: string;
   estimate_database_id: string;
   schedule_type: "residential" | "builder_slab";
@@ -308,6 +309,7 @@ function mapResidentialJob(row: DatabaseJobRow, events: DatabaseJobScheduleEvent
   return {
     id: row.id,
     databaseId: row.id,
+    customerDatabaseId: row.customer_id,
     scheduleEventDatabaseId: primaryEvent?.id || "",
     estimate_database_id: row.estimate_id || "",
     schedule_type: "residential",
@@ -345,6 +347,7 @@ function mapBuilderJob(row: DatabaseJobRow, events: DatabaseJobScheduleEventRow[
   return {
     id: row.id,
     databaseId: row.id,
+    customerDatabaseId: row.customer_id,
     scheduleEventDatabaseId: "",
     estimate_database_id: row.estimate_id || "",
     schedule_type: "builder_slab",

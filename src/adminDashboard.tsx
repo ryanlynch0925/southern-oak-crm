@@ -12,7 +12,9 @@ import { calendarStatusToDatabaseStatus, databaseStatusToCalendarStatus, toDatab
 import CrewsSection from "./features/admin/crews/CrewsSection";
 import { appCrewToDatabaseCrew, databaseCrewToAppCrew, normalizeCrew } from "./features/admin/crews/crewMappers";
 import { buildBuilderEvents, buildCalendarEvents, buildResidentialEvents, findCrewById, getCrewNumber } from "./features/admin/crews/crewUtils";
+import { buildCustomerSearchText, formatCustomerDisplayName, formatCustomerEmailLink, formatCustomerPhoneLink, formatCustomerTypeLabel, normalizeCustomerText } from "./features/admin/customers/customerService";
 import { useBuilders } from "./features/admin/hooks/useBuilders";
+import { useCustomers } from "./features/admin/hooks/useCustomers";
 import { useJobs } from "./features/admin/hooks/useJobs";
 import { useScheduleEvents } from "./features/admin/hooks/useScheduleEvents";
 import { Btn, Card, Modal } from "./features/admin/shared/AdminPrimitives";
@@ -27,6 +29,7 @@ const ADMIN_SECTIONS = [
   { id: "tickets", label: "Estimate Tickets", icon: "ti-file-text" },
   { id: "calendar", label: "Calendar Schedule", icon: "ti-calendar-event" },
   { id: "jobs", label: "Jobs", icon: "ti-hammer" },
+  { id: "customers", label: "Customers", icon: "ti-users" },
   { id: "crews", label: "Crews", icon: "ti-users-group" },
   { id: "builders", label: "Builders", icon: "ti-building-community" },
   { id: "finance", label: "Finance", icon: "ti-chart-pie-3" },
@@ -38,6 +41,7 @@ const getAllowedAdminSections = role => ADMIN_SECTIONS.filter(section => {
   if (section.id === "tickets") return canAccessEstimates(role);
   if (section.id === "calendar") return canViewCalendar(role);
   if (section.id === "jobs") return role !== "field";
+  if (section.id === "customers") return canAccessEstimates(role);
   if (section.id === "crews") return hasFullAccess(role);
   if (section.id === "builders") return hasFullAccess(role);
   if (section.id === "finance") return canAccessFinance(role);
@@ -52,6 +56,7 @@ const SECTION_SUBTITLES = {
   tickets: "Estimate intake and follow-up queue",
   calendar: "Scheduling, crews, and work assignments",
   jobs: "Accepted and active work across the board",
+  customers: "Customer records and related estimate and job activity",
   crews: "Capacity, assignments, and workload",
   builders: "Production builder relationships and communities",
   finance: "Revenue, payments, and profitability reporting",
@@ -235,6 +240,38 @@ const formatDateTime = value => {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 };
+const EMPTY_FIELD = "—";
+const formatDisplayField = value => normalizeCustomerText(value) || EMPTY_FIELD;
+const formatCustomerLocation = customer => [customer.city, customer.state].map(value => normalizeCustomerText(value)).filter(Boolean).join(", ") || EMPTY_FIELD;
+const customerContactLinkStyle = {
+  color: B.dark,
+  textDecoration: "underline",
+  textUnderlineOffset: 2,
+};
+const formatEstimateAmountLabel = ticket => {
+  if (ticket.quote != null) {
+    return fmtMoney(ticket.quote);
+  }
+
+  if (ticket.rLow != null || ticket.rHigh != null) {
+    return `${fmtMoney(ticket.rLow)} - ${fmtMoney(ticket.rHigh)}`;
+  }
+
+  return EMPTY_FIELD;
+};
+const getCustomerJobDisplayName = job => {
+  if (job.schedule_type === "residential") {
+    return job.name || job.customer_name || "Residential Job";
+  }
+
+  if (job.lot_number) {
+    return `${job.builder_name} - Lot ${job.lot_number}`;
+  }
+
+  return job.name || job.builder_name || "Builder Job";
+};
+const getCustomerJobReference = job => job.schedule_type === "residential" ? (job.work_order_number || EMPTY_FIELD) : EMPTY_FIELD;
+const getCustomerJobScheduledLabel = job => job.scheduled_date ? `${fmtDate(job.scheduled_date)} · ${job.scheduled_time || EMPTY_FIELD}` : EMPTY_FIELD;
 const suggestResidentialDuration = ticket => {
   if ((ticket.sqft || 0) >= 1800) return 2;
   if ((ticket.sqft || 0) >= 900) return 1;
@@ -1551,6 +1588,327 @@ function JobsSection({ jobs, loading = false, error = "", onSelectJob, onCreateB
   );
 }
 
+function CustomersSection({ customers, loading = false, error = "", tickets, jobs, onSelectCustomer }) {
+  const [search, setSearch] = useState("");
+  const [typeFilter, setTypeFilter] = useState("All");
+  const [isDesktopLayout, setIsDesktopLayout] = useState(() => typeof window === "undefined" ? true : window.innerWidth >= 1180);
+  const customerCounts = useMemo(() => {
+    const estimateCounts = new Map();
+    const jobCounts = new Map();
+
+    tickets.forEach(ticket => {
+      if (!ticket.customerDatabaseId) return;
+      estimateCounts.set(ticket.customerDatabaseId, (estimateCounts.get(ticket.customerDatabaseId) || 0) + 1);
+    });
+
+    jobs.forEach(job => {
+      if (!job.customerDatabaseId) return;
+      jobCounts.set(job.customerDatabaseId, (jobCounts.get(job.customerDatabaseId) || 0) + 1);
+    });
+
+    return { estimateCounts, jobCounts };
+  }, [tickets, jobs]);
+  const filtered = useMemo(() => {
+    const normalizedQuery = search.trim().toLowerCase();
+
+    return customers.filter(customer => {
+      const normalizedType = normalizeCustomerText(customer.customer_type).toLowerCase() || "residential";
+      if (typeFilter !== "All" && normalizedType !== typeFilter) {
+        return false;
+      }
+
+      if (!normalizedQuery) {
+        return true;
+      }
+
+      return buildCustomerSearchText(customer).includes(normalizedQuery);
+    });
+  }, [customers, search, typeFilter]);
+  const desktopColumns = "minmax(0,2fr) minmax(120px,.8fr) minmax(130px,1fr) minmax(180px,1.2fr) minmax(120px,.8fr) minmax(90px,.65fr) minmax(80px,.55fr) 120px";
+
+  useEffect(() => {
+    const handleResize = () => {
+      setIsDesktopLayout(window.innerWidth >= 1180);
+    };
+
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
+  return (
+    <>
+      <Card style={{ marginBottom: 14 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+          <div>
+            <h1 style={{ fontSize: "1.25rem", fontWeight: 700, color: B.dark, marginBottom: 4 }}>Customers</h1>
+            <p style={{ fontSize: ".8rem", color: B.gray }}>Browse customer records, filter by type, and review related estimates and jobs without leaving the admin workspace.</p>
+          </div>
+          <select value={typeFilter} onChange={e => setTypeFilter(e.target.value)} style={{ ...INP, width: "auto", cursor: "pointer" }}>
+            <option value="All">All customer types</option>
+            <option value="residential">Residential</option>
+            <option value="builder">Builder</option>
+            <option value="commercial">Commercial</option>
+          </select>
+        </div>
+        <div style={{ marginTop: 12, position: "relative" }}>
+          <i className="ti ti-search" style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", fontSize: 15, color: B.lgray }} aria-hidden="true" />
+          <input style={{ ...INP, paddingLeft: 32 }} value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name, company, phone, email, or address..." />
+        </div>
+      </Card>
+
+      {loading && (
+        <Card style={{ marginBottom: 14 }}>
+          <div style={{ fontSize: ".84rem", color: B.gray, fontWeight: 600 }}>Loading customers...</div>
+        </Card>
+      )}
+
+      {!loading && error && (
+        <Card style={{ marginBottom: 14, background: "#FFF8E1", borderColor: "#E5D7A7" }}>
+          <div style={{ fontSize: ".84rem", color: "#8A6A12", fontWeight: 700 }}>Unable to load customers.</div>
+          <div style={{ fontSize: ".78rem", color: B.gray, marginTop: 4 }}>{error}</div>
+        </Card>
+      )}
+
+      {!loading && !error && customers.length === 0 && (
+        <Card style={{ marginBottom: 14 }}>
+          <div style={{ fontSize: ".84rem", color: B.gray, fontWeight: 600 }}>No customers found.</div>
+        </Card>
+      )}
+
+      {!loading && !error && customers.length > 0 && filtered.length === 0 && (
+        <Card style={{ marginBottom: 14 }}>
+          <div style={{ fontSize: ".84rem", color: B.gray, fontWeight: 600 }}>No customers match the current search or filter.</div>
+        </Card>
+      )}
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {!loading && !error && filtered.length > 0 && isDesktopLayout && (
+          <Card style={{ padding: "12px 16px" }}>
+            <div style={{ display: "grid", gridTemplateColumns: desktopColumns, gap: 12, alignItems: "center", paddingRight: 8 }}>
+              {["Customer", "Type", "Phone", "Email", "City", "Estimates", "Jobs", "Action"].map(label => (
+                <div key={label} style={{ fontSize: ".72rem", color: B.gray, fontWeight: 700, textTransform: "uppercase", letterSpacing: .5, textAlign: label === "Action" ? "right" : "left" }}>
+                  {label}
+                </div>
+              ))}
+            </div>
+          </Card>
+        )}
+
+        {!loading && !error && filtered.map(customer => {
+          const displayName = formatCustomerDisplayName(customer);
+          const estimateCount = customerCounts.estimateCounts.get(customer.id) || 0;
+          const jobCount = customerCounts.jobCounts.get(customer.id) || 0;
+          const phoneLink = formatCustomerPhoneLink(customer.phone);
+          const emailLink = formatCustomerEmailLink(customer.email);
+
+          return (
+            <Card key={customer.id} style={{ padding: 16 }}>
+              <div style={{ display: "grid", gridTemplateColumns: isDesktopLayout ? desktopColumns : "repeat(auto-fit,minmax(140px,1fr))", gap: 12, alignItems: "center", paddingRight: isDesktopLayout ? 8 : 0 }}>
+                <div style={{ minWidth: 0, gridColumn: isDesktopLayout ? "auto" : "span 2" }}>
+                  {!isDesktopLayout && <div style={{ fontSize: ".72rem", color: B.gray, marginBottom: 2 }}>Customer</div>}
+                  <div style={{ fontWeight: 700, fontSize: ".92rem", color: B.dark, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{displayName}</div>
+                  <div style={{ fontSize: ".74rem", color: B.gray, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                    {formatDisplayField(customer.street_address)}
+                  </div>
+                </div>
+                <div style={{ minWidth: 0 }}>
+                  {!isDesktopLayout && <div style={{ fontSize: ".72rem", color: B.gray, marginBottom: 2 }}>Type</div>}
+                  <div style={{ fontSize: ".82rem", fontWeight: 700, color: B.mid }}>{formatCustomerTypeLabel(customer.customer_type)}</div>
+                </div>
+                <div style={{ minWidth: 0 }}>
+                  {!isDesktopLayout && <div style={{ fontSize: ".72rem", color: B.gray, marginBottom: 2 }}>Phone</div>}
+                  <div style={{ fontSize: ".82rem", color: B.dark, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                    {phoneLink.href ? (
+                      <a href={phoneLink.href} style={customerContactLinkStyle}>{phoneLink.display}</a>
+                    ) : phoneLink.display}
+                  </div>
+                </div>
+                <div style={{ minWidth: 0 }}>
+                  {!isDesktopLayout && <div style={{ fontSize: ".72rem", color: B.gray, marginBottom: 2 }}>Email</div>}
+                  <div style={{ fontSize: ".82rem", color: B.dark, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                    {emailLink.href ? (
+                      <a href={emailLink.href} style={customerContactLinkStyle}>{emailLink.display}</a>
+                    ) : emailLink.display}
+                  </div>
+                </div>
+                <div style={{ minWidth: 0 }}>
+                  {!isDesktopLayout && <div style={{ fontSize: ".72rem", color: B.gray, marginBottom: 2 }}>City</div>}
+                  <div style={{ fontSize: ".82rem", color: B.dark, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{formatCustomerLocation(customer)}</div>
+                </div>
+                <div style={{ minWidth: 0 }}>
+                  {!isDesktopLayout && <div style={{ fontSize: ".72rem", color: B.gray, marginBottom: 2 }}>Estimates</div>}
+                  <div style={{ fontSize: ".82rem", color: B.dark }}>{estimateCount}</div>
+                </div>
+                <div style={{ minWidth: 0 }}>
+                  {!isDesktopLayout && <div style={{ fontSize: ".72rem", color: B.gray, marginBottom: 2 }}>Jobs</div>}
+                  <div style={{ fontSize: ".82rem", color: B.dark }}>{jobCount}</div>
+                </div>
+                <div style={{ minWidth: 0, justifySelf: "end", textAlign: "right" }}>
+                  {!isDesktopLayout && <div style={{ fontSize: ".72rem", color: B.gray, marginBottom: 2, textAlign: "right" }}>Action</div>}
+                  <Btn sm v="outline" onClick={() => onSelectCustomer(customer.id)}>View Details</Btn>
+                </div>
+              </div>
+            </Card>
+          );
+        })}
+      </div>
+    </>
+  );
+}
+
+function CustomerDetailView({ customer, tickets, jobs, onBack, onOpenEstimate, onOpenJob }) {
+  const phoneLink = formatCustomerPhoneLink(customer.phone);
+  const emailLink = formatCustomerEmailLink(customer.email);
+  const relatedTickets = useMemo(
+    () => tickets
+      .filter(ticket => ticket.customerDatabaseId === customer.id)
+      .sort((first, second) => new Date(second.at).getTime() - new Date(first.at).getTime()),
+    [customer.id, tickets]
+  );
+  const relatedJobs = useMemo(
+    () => jobs
+      .filter(job => job.customerDatabaseId === customer.id)
+      .sort((first, second) => `${second.scheduled_date || ""}|${second.name}`.localeCompare(`${first.scheduled_date || ""}|${first.name}`)),
+    [customer.id, jobs]
+  );
+  const displayName = formatCustomerDisplayName(customer);
+
+  return (
+    <div style={{ minHeight: "100vh", background: "#F4F6F3" }}>
+      <div style={{ background: B.dark, padding: "0 16px" }}>
+        <div style={{ maxWidth: 1100, margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "space-between", height: 56 }}>
+          <button onClick={onBack} style={{ background: "none", border: "none", color: "rgba(255,255,255,.7)", cursor: "pointer", display: "flex", alignItems: "center", gap: 6, fontFamily: "inherit", fontSize: ".82rem" }}>
+            <i className="ti ti-arrow-left" style={{ fontSize: 16 }} aria-hidden="true" />Back to customers
+          </button>
+          <span style={{ fontSize: ".78rem", color: "rgba(255,255,255,.72)", fontWeight: 700 }}>{formatCustomerTypeLabel(customer.customer_type)}</span>
+        </div>
+      </div>
+      <div style={{ maxWidth: 1100, margin: "0 auto", padding: "20px 16px 60px" }}>
+        <Card style={{ marginBottom: 16 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+            <div>
+              <h1 style={{ fontSize: "1.2rem", fontWeight: 700, color: B.dark, marginBottom: 4 }}>{displayName}</h1>
+              <div style={{ fontSize: ".82rem", color: B.gray }}>{formatCustomerLocation(customer)}</div>
+            </div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              <span style={{ fontSize: ".78rem", color: B.gray }}>{relatedTickets.length} estimate{relatedTickets.length === 1 ? "" : "s"}</span>
+              <span style={{ fontSize: ".78rem", color: B.gray }}>{relatedJobs.length} job{relatedJobs.length === 1 ? "" : "s"}</span>
+            </div>
+          </div>
+        </Card>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1.05fr .95fr", gap: 16, alignItems: "start" }}>
+          <Card>
+            <div style={{ fontSize: ".82rem", fontWeight: 700, color: B.dark, textTransform: "uppercase", letterSpacing: .5, marginBottom: 12 }}>Customer Information</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 12 }}>
+              {[
+                ["Display name", displayName],
+                ["Customer type", formatCustomerTypeLabel(customer.customer_type)],
+                ["First name", formatDisplayField(customer.first_name)],
+                ["Last name", formatDisplayField(customer.last_name)],
+                ["Company name", formatDisplayField(customer.company_name)],
+                ["Phone", phoneLink.href ? <a href={phoneLink.href} style={customerContactLinkStyle}>{phoneLink.display}</a> : phoneLink.display],
+                ["Email", emailLink.href ? <a href={emailLink.href} style={customerContactLinkStyle}>{emailLink.display}</a> : emailLink.display],
+                ["Street address", formatDisplayField(customer.street_address)],
+                ["City", formatDisplayField(customer.city)],
+                ["State", formatDisplayField(customer.state)],
+                ["Zip code", formatDisplayField(customer.zip_code)],
+                ["Created", customer.created_at ? formatDateTime(customer.created_at) : EMPTY_FIELD],
+                ["Last updated", customer.updated_at ? formatDateTime(customer.updated_at) : EMPTY_FIELD],
+              ].map(([label, value]) => (
+                <div key={label}>
+                  <div style={{ fontSize: ".7rem", color: B.gray, marginBottom: 2 }}>{label}</div>
+                  <div style={{ fontSize: ".84rem", color: B.dark, fontWeight: 700, lineHeight: 1.5 }}>{value}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{ marginTop: 14 }}>
+              <div style={{ fontSize: ".7rem", color: B.gray, marginBottom: 4 }}>Notes</div>
+              <div style={{ fontSize: ".84rem", color: B.mid, lineHeight: 1.6 }}>{formatDisplayField(customer.notes)}</div>
+            </div>
+          </Card>
+
+          <Card>
+            <div style={{ fontSize: ".82rem", fontWeight: 700, color: B.dark, textTransform: "uppercase", letterSpacing: .5, marginBottom: 12 }}>Related Estimates</div>
+            {relatedTickets.length === 0 ? (
+              <div style={{ fontSize: ".84rem", color: B.gray, fontWeight: 600 }}>No estimates are linked to this customer yet.</div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                {relatedTickets.map(ticket => (
+                  <div key={ticket.id} style={{ padding: "12px 14px", borderRadius: 10, border: `1px solid ${B.border}`, background: B.white }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                      <div>
+                        <div style={{ fontSize: ".86rem", fontWeight: 700, color: B.dark }}>{ticket.ptype || "Estimate"}</div>
+                        <div style={{ fontSize: ".74rem", color: B.gray, marginTop: 2 }}>{ticket.at ? fmtDateShort(ticket.at.slice(0, 10)) : EMPTY_FIELD} · {ticket.addr || EMPTY_FIELD}</div>
+                      </div>
+                      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                        <Pill status={ticket.status} />
+                        <Btn sm v="outline" onClick={() => onOpenEstimate(ticket)}>View Estimate</Btn>
+                      </div>
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 10, marginTop: 10 }}>
+                      <div>
+                        <div style={{ fontSize: ".7rem", color: B.gray, marginBottom: 2 }}>Estimate date</div>
+                        <div style={{ fontSize: ".8rem", color: B.dark }}>{ticket.at ? fmtDate(ticket.at.slice(0, 10)) : EMPTY_FIELD}</div>
+                      </div>
+                      <div>
+                        <div style={{ fontSize: ".7rem", color: B.gray, marginBottom: 2 }}>Job type</div>
+                        <div style={{ fontSize: ".8rem", color: B.dark }}>{ticket.ptype || EMPTY_FIELD}</div>
+                      </div>
+                      <div>
+                        <div style={{ fontSize: ".7rem", color: B.gray, marginBottom: 2 }}>Estimated amount</div>
+                        <div style={{ fontSize: ".8rem", color: B.dark }}>{formatEstimateAmountLabel(ticket)}</div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Card>
+        </div>
+
+        <Card style={{ marginTop: 16 }}>
+          <div style={{ fontSize: ".82rem", fontWeight: 700, color: B.dark, textTransform: "uppercase", letterSpacing: .5, marginBottom: 12 }}>Related Jobs</div>
+          {relatedJobs.length === 0 ? (
+            <div style={{ fontSize: ".84rem", color: B.gray, fontWeight: 600 }}>No jobs are linked to this customer yet.</div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {relatedJobs.map(job => (
+                <div key={job.id} style={{ padding: "12px 14px", borderRadius: 10, border: `1px solid ${B.border}`, background: B.white }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                    <div>
+                      <div style={{ fontSize: ".86rem", fontWeight: 700, color: B.dark }}>{getCustomerJobDisplayName(job)}</div>
+                      <div style={{ fontSize: ".74rem", color: B.gray, marginTop: 2 }}>{job.job_address || EMPTY_FIELD}</div>
+                    </div>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                      <Pill status={job.status} />
+                      <Btn sm v="outline" onClick={() => onOpenJob(job.id)}>View Job</Btn>
+                    </div>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 10, marginTop: 10 }}>
+                    <div>
+                      <div style={{ fontSize: ".7rem", color: B.gray, marginBottom: 2 }}>Job type</div>
+                      <div style={{ fontSize: ".8rem", color: B.dark }}>{job.job_type || EMPTY_FIELD}</div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: ".7rem", color: B.gray, marginBottom: 2 }}>Date scheduled</div>
+                      <div style={{ fontSize: ".8rem", color: B.dark }}>{getCustomerJobScheduledLabel(job)}</div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: ".7rem", color: B.gray, marginBottom: 2 }}>PO number</div>
+                      <div style={{ fontSize: ".8rem", color: B.dark }}>{getCustomerJobReference(job)}</div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+      </div>
+    </div>
+  );
+}
+
 function SettingsSection({ settings, onUpdateSettings, historyCounts }) {
   return (
     <>
@@ -2198,10 +2556,17 @@ export default function AdminWorkspace({ appRole, tickets, ticketsLoading = fals
   const [selectedTicketId, setSelectedTicketId] = useState(null);
   const [selectedJobId, setSelectedJobId] = useState(null);
   const [selectedCalendarJobId, setSelectedCalendarJobId] = useState(null);
+  const [selectedCustomerId, setSelectedCustomerId] = useState(null);
   const [crews, setCrews] = useState([]);
   const jobsAccessEnabled = appRole !== "field";
+  const customersAccessEnabled = canAccessEstimates(appRole);
   const builderAccessEnabled = hasFullAccess(appRole) || appRole === "office";
   const { builders, buildersLoading, buildersError, createBuilder, getBuilderCreateError } = useBuilders(builderAccessEnabled);
+  const {
+    customers,
+    loading: customersLoading,
+    error: customersError,
+  } = useCustomers(customersAccessEnabled);
   const {
     jobs,
     loading: jobsLoading,
@@ -2241,6 +2606,7 @@ export default function AdminWorkspace({ appRole, tickets, ticketsLoading = fals
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   const selectedTicket = tickets.find(ticket => ticket.id === selectedTicketId) || null;
+  const selectedCustomer = customers.find(customer => customer.id === selectedCustomerId) || null;
   const findLoadedResidentialScheduleRow = jobDatabaseId => {
     if (!jobDatabaseId) return null;
     return scheduleRows.find(row => row.job_id === jobDatabaseId && row.builder_step === "residential_job") || null;
@@ -2309,6 +2675,7 @@ export default function AdminWorkspace({ appRole, tickets, ticketsLoading = fals
       setSelectedTicketId(null);
       setSelectedJobId(null);
       setSelectedCalendarJobId(null);
+      setSelectedCustomerId(null);
 
       if (typeof window !== "undefined") {
         window.sessionStorage.setItem(ADMIN_SECTION_STORAGE_KEY, defaultSection);
@@ -3511,10 +3878,29 @@ export default function AdminWorkspace({ appRole, tickets, ticketsLoading = fals
         });
       }} onOpenPhaseEdit={openPhaseEdit} onOpenPhaseDetails={openPhaseDetails} readOnly={calendarReadOnly} />;
     }
+    if (selectedCustomer) {
+      return (
+        <CustomerDetailView
+          customer={selectedCustomer}
+          tickets={tickets}
+          jobs={jobs}
+          onBack={() => setSelectedCustomerId(null)}
+          onOpenEstimate={ticket => {
+            setSelectedCustomerId(null);
+            setSelectedTicketId(ticket.id);
+          }}
+          onOpenJob={jobId => {
+            setSelectedCustomerId(null);
+            setSelectedJobId(jobId);
+          }}
+        />
+      );
+    }
     if (section === "dashboard") return <DashboardHomeSection tickets={tickets} jobs={jobs} events={allEvents} conflicts={activeConflicts} setSection={setSection} />;
     if (section === "tickets") return <EstimateTicketsSection tickets={tickets} ticketsLoading={ticketsLoading} ticketsError={ticketsError} onSelectTicket={ticket => setSelectedTicketId(ticket.id)} onAcceptTicket={ticket => applyTicketStatus(ticket, "Estimate Accepted", "Estimate accepted and ready for office scheduling.")} onScheduleTicket={openResidentialSchedule} jobs={jobs} scheduledEstimateDatabaseIds={scheduledEstimateDatabaseIds} />;
     if (section === "calendar") return <CalendarSection events={scheduleEvents} crews={crews} onOpenJob={jobId => setSelectedCalendarJobId(jobId)} pendingResidentialDraft={canManageSchedule ? residentialDraft : null} onPendingResidentialDraftChange={setResidentialDraft} onSavePendingResidentialSchedule={saveResidentialSchedule} onCancelPendingResidentialSchedule={() => setResidentialDraft(null)} pendingBuilderSchedule={canManageSchedule ? builderScheduleDraft : null} onPendingBuilderScheduleChange={setBuilderScheduleDraft} onSavePendingBuilderSchedule={saveBuilderSchedule} onCancelPendingBuilderSchedule={() => setBuilderScheduleDraft(null)} readOnly={calendarReadOnly} loading={scheduleLoading} error={scheduleError} />;
     if (section === "jobs") return <JobsSection jobs={jobs} loading={jobsLoading} error={jobsError} onSelectJob={jobId => setSelectedJobId(jobId)} onCreateBuilderJob={openBuilderJobModal} canCreateBuilderJob={canManageSchedule} />;
+    if (section === "customers") return <CustomersSection customers={customers} loading={customersLoading} error={customersError} tickets={tickets} jobs={jobs} onSelectCustomer={customerId => setSelectedCustomerId(customerId)} />;
     if (section === "crews") return <CrewsSection crews={crews} jobs={jobs} onCreateCrew={createCrew} onUpdateCrew={updateCrew} />;
     if (section === "builders") return <BuildersSection builders={builders} buildersLoading={buildersLoading} buildersError={buildersError} jobs={jobs} onCreateBuilderJob={openBuilderJobModal} onCreateBuilder={() => setBuilderRecordDraft({ name: "", contact: "", phone: "", communities: "" })} onOpenJob={jobId => setSelectedJobId(jobId)} />;
     if (section === "finance") return <FinanceDashboard financeView={financeView} onFinanceViewChange={setFinanceView} />;
@@ -3523,7 +3909,7 @@ export default function AdminWorkspace({ appRole, tickets, ticketsLoading = fals
 
   return (
     <div className="admin-page-shell" style={{ minHeight: "100vh", background: "#F4F6F3" }}>
-      {!selectedTicket && !selectedJob && !selectedCalendarJob && (
+      {!selectedTicket && !selectedJob && !selectedCalendarJob && !selectedCustomer && (
         <div className="admin-shell">
           <AdminSidebar
             section={section}
@@ -3553,7 +3939,7 @@ export default function AdminWorkspace({ appRole, tickets, ticketsLoading = fals
           </div>
         </div>
       )}
-      {(selectedTicket || selectedJob || selectedCalendarJob) && content}
+      {(selectedTicket || selectedJob || selectedCalendarJob || selectedCustomer) && content}
 
       {canManageSchedule && builderDraft && <BuilderJobModal draft={builderDraft} crews={crews} builders={builders} onClose={() => setBuilderDraft(null)} onSave={createBuilderJob} />}
       {hasFullAccess(appRole) && builderRecordDraft && <BuilderRecordModal draft={builderRecordDraft} onClose={() => setBuilderRecordDraft(null)} onSave={createBuilderRecord} />}

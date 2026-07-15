@@ -43,6 +43,7 @@ export interface TicketNotification {
 export interface Ticket {
   id: string;
   databaseId?: string;
+  customerDatabaseId?: string;
   at: string;
   name: string;
   phone: string;

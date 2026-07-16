@@ -801,59 +801,76 @@ function AdminTopBar({ section, financeView, onOpenMenu, setPage, sections = ADM
 function DashboardHomeSection({ tickets, jobs, events, conflicts, setSection }) {
   const openReceivables = tickets.filter(ticket => ["Needs Review", "Interested", "Site Visit Requested", "Follow Up Needed", "Estimate Accepted", "Ready to Schedule"].includes(ticket.status)).slice(0, 4);
   const upcoming = events.filter(event => event.date >= todayIso()).slice(0, 5);
+  const shortcuts = [
+    { label: "Estimate Tickets", icon: "ti-file-text", onClick: () => setSection("tickets") },
+    { label: "Calendar Schedule", icon: "ti-calendar-event", onClick: () => setSection("calendar") },
+    { label: "Jobs", icon: "ti-hammer", onClick: () => setSection("jobs") },
+    { label: "Finance", icon: "ti-chart-pie-3", onClick: () => setSection("finance") },
+  ];
   return (
-    <>
+    <div className="dashboard-home-shell">
       <SummaryCards tickets={tickets} jobs={jobs} events={events} conflicts={conflicts} />
-      <div style={{ display: "grid", gridTemplateColumns: "1.2fr .8fr", gap: 16 }}>
-        <Card className="admin-section-card">
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", marginBottom: 14, flexWrap: "wrap" }}>
+      <div className="dashboard-main-grid">
+        <Card className="admin-section-card dashboard-panel dashboard-operations-panel">
+          <div className="dashboard-panel-head">
             <div>
-              <h1 style={{ fontSize: "1.2rem", fontWeight: 700, color: B.dark, marginBottom: 4 }}>Operations Dashboard</h1>
-              <p style={{ fontSize: ".8rem", color: B.gray }}>Quick access into scheduling, estimate follow-up, and active work.</p>
+              <h1 className="dashboard-panel-title">Operations Dashboard</h1>
+              <p className="dashboard-panel-subtitle">Quick access into scheduling, estimate follow-up, and active work.</p>
             </div>
-            <button className="oak-button oak-button--primary" onClick={() => setSection("tickets")} style={{ minHeight: 42, padding: "10px 14px", borderRadius: 10, border: "none", cursor: "pointer", fontWeight: 700, fontFamily: "inherit" }}>
+            <button className="oak-button oak-button--primary dashboard-primary-action" onClick={() => setSection("tickets")} style={{ minHeight: 42, padding: "10px 14px", borderRadius: 10, border: "none", cursor: "pointer", fontWeight: 700, fontFamily: "inherit" }}>
               Open Estimate Queue
             </button>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 12 }}>
-            {[
-              { label: "Estimate Tickets", icon: "ti-file-text", onClick: () => setSection("tickets") },
-              { label: "Calendar Schedule", icon: "ti-calendar-event", onClick: () => setSection("calendar") },
-              { label: "Jobs", icon: "ti-hammer", onClick: () => setSection("jobs") },
-              { label: "Finance", icon: "ti-chart-pie-3", onClick: () => setSection("finance") },
-            ].map(item => (
-              <button key={item.label} className="oak-button oak-button--outline" onClick={item.onClick} style={{ minHeight: 74, padding: "14px 16px", borderRadius: 10, cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}>
-                <div style={{ fontSize: ".76rem", color: B.gray, marginBottom: 8 }}><i className={`ti ${item.icon}`} style={{ marginRight: 6 }} aria-hidden="true" />Workspace</div>
-                <div style={{ fontSize: ".92rem", fontWeight: 700, color: B.dark }}>{item.label}</div>
+          <div className="dashboard-shortcuts-grid">
+            {shortcuts.map(item => (
+              <button key={item.label} className="oak-button oak-button--outline dashboard-shortcut-button" onClick={item.onClick} style={{ borderRadius: 10, cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}>
+                <div className="dashboard-shortcut-meta">
+                  <i className={`ti ${item.icon}`} style={{ fontSize: 14 }} aria-hidden="true" />
+                  <span>Workspace</span>
+                </div>
+                <div className="dashboard-shortcut-title">{item.label}</div>
+                <div className="dashboard-shortcut-helper">Open {item.label.toLowerCase()}.</div>
               </button>
             ))}
           </div>
         </Card>
-        <Card className="admin-section-card">
-          <div style={{ fontSize: ".9rem", fontWeight: 700, color: B.dark, marginBottom: 12 }}>Needs Attention</div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        <Card className="admin-section-card dashboard-panel dashboard-attention-panel">
+          <div className="dashboard-side-panel-head">
+            <div className="dashboard-side-panel-title">Needs Attention</div>
+            <div className="dashboard-side-panel-subtitle">Existing live follow-up items that need action soon.</div>
+          </div>
+          <div className="dashboard-needs-list">
             {openReceivables.map(ticket => (
-              <div key={ticket.id} style={{ padding: "10px 12px", borderRadius: 10, background: B.sand, border: `1px solid ${B.border}` }}>
-                <div style={{ fontSize: ".82rem", fontWeight: 700, color: B.dark }}>{ticket.name}</div>
-                <div style={{ fontSize: ".74rem", color: B.gray }}>{ticket.ptype} · {ticket.status}</div>
+              <div key={ticket.id} className="dashboard-needs-item">
+                <div className="dashboard-needs-copy">
+                  <div className="dashboard-needs-name">{ticket.name}</div>
+                  <div className="dashboard-needs-meta">{ticket.ptype}</div>
+                </div>
+                <div className="dashboard-needs-status">{ticket.status}</div>
               </div>
             ))}
           </div>
         </Card>
       </div>
-      <Card className="admin-section-card" style={{ marginTop: 16 }}>
-        <div style={{ fontSize: ".9rem", fontWeight: 700, color: B.dark, marginBottom: 12 }}>Upcoming Scheduled Work</div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(210px,1fr))", gap: 10 }}>
+      <Card className="admin-section-card dashboard-panel dashboard-upcoming-panel">
+        <div className="dashboard-side-panel-head">
+          <div className="dashboard-side-panel-title">Upcoming Scheduled Work</div>
+          <div className="dashboard-side-panel-subtitle">Existing live scheduled work cards, cleaned up for readability and wrapping.</div>
+        </div>
+        <div className="dashboard-upcoming-grid">
           {upcoming.map(event => (
-            <div key={event.id} style={{ padding: "12px 14px", borderRadius: 10, border: `1px solid ${B.border}`, background: B.white }}>
-              <div style={{ fontSize: ".8rem", fontWeight: 700, color: B.dark }}>{event.customer_name || `${event.builder_name} Lot ${event.lot_number}`}</div>
-              <div style={{ fontSize: ".74rem", color: B.gray, marginTop: 4 }}>{fmtDate(event.date)} · {event.time}</div>
-              <div style={{ fontSize: ".72rem", color: B.gray, marginTop: 4 }}>{event.phase_label}</div>
+            <div key={event.id} className="dashboard-upcoming-card">
+              <div className="dashboard-upcoming-accent" aria-hidden="true" />
+              <div className="dashboard-upcoming-body">
+                <div className="dashboard-upcoming-name">{event.customer_name || `${event.builder_name} Lot ${event.lot_number}`}</div>
+                <div className="dashboard-upcoming-datetime">{fmtDate(event.date)} · {event.time}</div>
+                <div className="dashboard-upcoming-type">{event.phase_label}</div>
+              </div>
             </div>
           ))}
         </div>
       </Card>
-    </>
+    </div>
   );
 }
 
@@ -874,14 +891,16 @@ function SummaryCards({ tickets, jobs, events, conflicts }) {
     { label: "Delayed jobs", value: delayed, icon: "ti-clock-exclamation", color: "#6C3483" },
   ];
   return (
-    <div className="admin-card-grid admin-summary-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(170px,1fr))", gap: 12, marginBottom: 18 }}>
+    <div className="admin-card-grid admin-summary-grid">
       {cards.map(card => (
-        <Card key={card.label} style={{ padding: 16 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-            <i className={`ti ${card.icon}`} style={{ fontSize: 16, color: card.color }} aria-hidden="true" />
-            <span style={{ fontSize: ".72rem", color: B.gray, textTransform: "uppercase", letterSpacing: .5 }}>{card.label}</span>
+        <Card key={card.label} className="dashboard-summary-card">
+          <div className="dashboard-summary-head">
+            <div className="dashboard-summary-icon" style={{ color: card.color }}>
+              <i className={`ti ${card.icon}`} style={{ fontSize: 15 }} aria-hidden="true" />
+            </div>
+            <span className="dashboard-summary-label">{card.label}</span>
           </div>
-          <div style={{ fontSize: "1.6rem", fontWeight: 700, color: card.color }}>{card.value}</div>
+          <div className="dashboard-summary-value" style={{ color: card.color }}>{card.value}</div>
         </Card>
       ))}
     </div>
@@ -4357,7 +4376,7 @@ export default function AdminWorkspace({
               setPage={setPage}
               sections={allowedSections}
             />
-            <div className="admin-content-shell" style={{ padding: "22px 16px 60px" }}>
+            <div className="admin-content-shell" style={{ padding: "22px clamp(14px, 1.5vw, 24px) 60px" }}>
               {content}
             </div>
           </div>

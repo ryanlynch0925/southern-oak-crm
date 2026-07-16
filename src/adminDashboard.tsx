@@ -672,7 +672,6 @@ function AdminSidebar({
                 <button
                   onClick={() => {
                     setSection(item.id);
-                    onClose();
                   }}
                   style={{
                     display: "flex",
@@ -747,7 +746,6 @@ function AdminSidebar({
                 className={`admin-sidebar-footer-button${section === "settings" ? " is-active" : ""}`}
                 onClick={() => {
                   setSection("settings");
-                  onClose();
                 }}
               >
                 <i className="ti ti-settings" style={{ fontSize: 15 }} aria-hidden="true" />
@@ -1892,9 +1890,24 @@ function CustomersSection({
           const jobCount = customerCounts.jobCounts.get(customer.id) || 0;
           const phoneLink = formatCustomerPhoneLink(customer.phone);
           const emailLink = formatCustomerEmailLink(customer.email);
+          const openQuickView = triggerElement => onSelectCustomer(customer.id, triggerElement);
+          const stopCardSelection = event => event.stopPropagation();
 
           return (
-            <Card key={customer.id} style={{ padding: 16 }}>
+            <Card
+              key={customer.id}
+              role="button"
+              tabIndex={0}
+              onClick={event => openQuickView(event.currentTarget)}
+              onKeyDown={event => {
+                if (event.target !== event.currentTarget) return;
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  openQuickView(event.currentTarget);
+                }
+              }}
+              style={{ padding: 16, cursor: "pointer", transition: "transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease", boxShadow: "0 8px 22px rgba(15, 26, 18, 0.04)" }}
+            >
               <div style={{ display: "grid", gridTemplateColumns: isDesktopLayout ? desktopColumns : "repeat(auto-fit,minmax(140px,1fr))", gap: 12, alignItems: "center", paddingRight: isDesktopLayout ? 8 : 0 }}>
                 <div style={{ minWidth: 0, gridColumn: isDesktopLayout ? "auto" : "span 2" }}>
                   {!isDesktopLayout && <div style={{ fontSize: ".72rem", color: B.gray, marginBottom: 2 }}>Customer</div>}
@@ -1911,7 +1924,7 @@ function CustomersSection({
                   {!isDesktopLayout && <div style={{ fontSize: ".72rem", color: B.gray, marginBottom: 2 }}>Phone</div>}
                   <div style={{ fontSize: ".82rem", color: B.dark, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                     {phoneLink.href ? (
-                      <a href={phoneLink.href} style={customerContactLinkStyle}>{phoneLink.display}</a>
+                      <a href={phoneLink.href} onClick={stopCardSelection} style={customerContactLinkStyle}>{phoneLink.display}</a>
                     ) : phoneLink.display}
                   </div>
                 </div>
@@ -1919,7 +1932,7 @@ function CustomersSection({
                   {!isDesktopLayout && <div style={{ fontSize: ".72rem", color: B.gray, marginBottom: 2 }}>Email</div>}
                   <div style={{ fontSize: ".82rem", color: B.dark, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                     {emailLink.href ? (
-                      <a href={emailLink.href} style={customerContactLinkStyle}>{emailLink.display}</a>
+                      <a href={emailLink.href} onClick={stopCardSelection} style={customerContactLinkStyle}>{emailLink.display}</a>
                     ) : emailLink.display}
                   </div>
                 </div>
@@ -1941,7 +1954,10 @@ function CustomersSection({
                 </div>
                 <div style={{ minWidth: 0, justifySelf: "end", textAlign: "right" }}>
                   {!isDesktopLayout && <div style={{ fontSize: ".72rem", color: B.gray, marginBottom: 2, textAlign: "right" }}>Action</div>}
-                  <Btn sm v="outline" onClick={() => onSelectCustomer(customer.id)}>View Details</Btn>
+                  <Btn sm v="outline" onClick={event => {
+                    stopCardSelection(event);
+                    openQuickView(event.currentTarget);
+                  }}>Quick View</Btn>
                 </div>
               </div>
             </Card>
@@ -1949,6 +1965,113 @@ function CustomersSection({
         })}
       </div>
     </>
+  );
+}
+
+function CustomerQuickViewModal({
+  customer,
+  tickets,
+  jobs,
+  canManageCustomer = false,
+  customerActionBusy = false,
+  onClose,
+  onEditCustomer,
+  onOpenFullCustomer,
+}) {
+  const displayName = formatCustomerDisplayName(customer);
+  const customerInitials = buildInitials(displayName, customer.email);
+  const phoneLink = formatCustomerPhoneLink(customer.phone);
+  const emailLink = formatCustomerEmailLink(customer.email);
+  const estimateCount = useMemo(
+    () => tickets.filter(ticket => ticket.customerDatabaseId === customer.id).length,
+    [customer.id, tickets]
+  );
+  const jobCount = useMemo(
+    () => jobs.filter(job => job.customerDatabaseId === customer.id).length,
+    [customer.id, jobs]
+  );
+  const locationLabel = [customer.street_address, customer.city, customer.state, customer.zip_code]
+    .map(value => normalizeCustomerText(value))
+    .filter(Boolean)
+    .join(", ") || formatCustomerLocation(customer);
+
+  useEffect(() => {
+    const focusTimer = window.setTimeout(() => {
+      document.querySelector(".customer-quick-view-actions .oak-button--primary")?.focus();
+    }, 0);
+
+    const handleKeyDown = event => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.clearTimeout(focusTimer);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [onClose]);
+
+  return (
+    <Modal title="Customer Quick View" onClose={onClose} width={620}>
+      <div className="customer-quick-view" role="dialog" aria-modal="true" aria-label={`Customer Quick View for ${displayName}`}>
+        <div className="customer-quick-view-head">
+          <div className="customer-quick-view-identity">
+            <div className="customer-quick-view-avatar" aria-hidden="true">{customerInitials}</div>
+            <div className="customer-quick-view-copy">
+              <div className="customer-quick-view-title">{displayName}</div>
+              <div className="customer-quick-view-subtitle">{formatCustomerTypeLabel(customer.customer_type)}</div>
+            </div>
+          </div>
+          <div className="customer-quick-view-status">
+            <Pill status={getCustomerStatusLabel(customer)} />
+          </div>
+        </div>
+
+        <div className="customer-quick-view-grid">
+          <div className="customer-quick-view-field">
+            <div className="customer-quick-view-label">Phone</div>
+            <div className={`customer-quick-view-value${!phoneLink.href && phoneLink.display === EMPTY_FIELD ? " customer-quick-view-value--empty" : ""}`}>
+              {phoneLink.href ? <a href={phoneLink.href} style={customerContactLinkStyle}>{phoneLink.display}</a> : phoneLink.display}
+            </div>
+          </div>
+          <div className="customer-quick-view-field">
+            <div className="customer-quick-view-label">Email</div>
+            <div className={`customer-quick-view-value${!emailLink.href && emailLink.display === EMPTY_FIELD ? " customer-quick-view-value--empty" : ""}`}>
+              {emailLink.href ? <a href={emailLink.href} style={customerContactLinkStyle}>{emailLink.display}</a> : emailLink.display}
+            </div>
+          </div>
+          <div className="customer-quick-view-field">
+            <div className="customer-quick-view-label">Location</div>
+            <div className={`customer-quick-view-value${locationLabel === EMPTY_FIELD ? " customer-quick-view-value--empty" : ""}`}>{locationLabel}</div>
+          </div>
+          <div className="customer-quick-view-field">
+            <div className="customer-quick-view-label">Estimate Count</div>
+            <div className="customer-quick-view-value">{estimateCount}</div>
+          </div>
+          <div className="customer-quick-view-field">
+            <div className="customer-quick-view-label">Job Count</div>
+            <div className="customer-quick-view-value">{jobCount}</div>
+          </div>
+        </div>
+
+        <div className="customer-quick-view-actions">
+          <Btn sm v="outline" onClick={onClose} style={{ borderRadius: 10 }}>
+            Close
+          </Btn>
+          {canManageCustomer && (
+            <Btn sm v="outline" onClick={onEditCustomer} disabled={customerActionBusy} style={{ borderRadius: 10 }}>
+              Edit Customer
+            </Btn>
+          )}
+          <Btn sm v="primary" onClick={onOpenFullCustomer} style={{ borderRadius: 10 }}>
+            Open Full Customer
+          </Btn>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
@@ -1981,109 +2104,161 @@ function CustomerDetailView({
     [customer.id, jobs]
   );
   const displayName = formatCustomerDisplayName(customer);
+  const customerInitials = buildInitials(displayName, customer.email);
+  const locationLabel = formatCustomerLocation(customer);
+  const phoneDisplay = phoneLink.href ? <a href={phoneLink.href} style={customerContactLinkStyle}>{phoneLink.display}</a> : phoneLink.display;
+  const emailDisplay = emailLink.href ? <a href={emailLink.href} style={customerContactLinkStyle}>{emailLink.display}</a> : emailLink.display;
+  const customerFields = [
+    { label: "Display name", value: displayName },
+    { label: "Status", value: <Pill status={getCustomerStatusLabel(customer)} /> },
+    { label: "Customer type", value: formatCustomerTypeLabel(customer.customer_type) },
+    { label: "First name", value: formatDisplayField(customer.first_name) },
+    { label: "Last name", value: formatDisplayField(customer.last_name) },
+    { label: "Company name", value: formatDisplayField(customer.company_name) },
+    { label: "Phone", value: phoneDisplay, empty: !phoneLink.href && phoneLink.display === EMPTY_FIELD },
+    { label: "Email", value: emailDisplay, empty: !emailLink.href && emailLink.display === EMPTY_FIELD },
+    { label: "Street address", value: formatDisplayField(customer.street_address) },
+    { label: "City", value: formatDisplayField(customer.city) },
+    { label: "State", value: formatDisplayField(customer.state) },
+    { label: "Zip code", value: formatDisplayField(customer.zip_code) },
+    { label: "Created date", value: customer.created_at ? formatDateTime(customer.created_at) : EMPTY_FIELD, empty: !customer.created_at },
+    { label: "Last updated", value: customer.updated_at ? formatDateTime(customer.updated_at) : EMPTY_FIELD, empty: !customer.updated_at },
+  ];
 
   return (
-    <div style={{ minHeight: "100vh", background: "#F4F6F3" }}>
-      <div style={{ background: B.dark, padding: "0 16px" }}>
-        <div style={{ maxWidth: 1100, margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "space-between", height: 56 }}>
-          <button onClick={onBack} style={{ background: "none", border: "none", color: "rgba(255,255,255,.7)", cursor: "pointer", display: "flex", alignItems: "center", gap: 6, fontFamily: "inherit", fontSize: ".82rem" }}>
-            <i className="ti ti-arrow-left" style={{ fontSize: 16 }} aria-hidden="true" />Back to customers
-          </button>
-          <span style={{ fontSize: ".78rem", color: "rgba(255,255,255,.72)", fontWeight: 700 }}>{formatCustomerTypeLabel(customer.customer_type)}</span>
-        </div>
-      </div>
-      <div style={{ maxWidth: 1100, margin: "0 auto", padding: "20px 16px 60px" }}>
-        <Card style={{ marginBottom: 16 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
-            <div>
-              <h1 style={{ fontSize: "1.2rem", fontWeight: 700, color: B.dark, marginBottom: 4 }}>{displayName}</h1>
-              <div style={{ fontSize: ".82rem", color: B.gray }}>{formatCustomerLocation(customer)}</div>
+    <div className="customer-detail-shell">
+      <div className="customer-detail-page">
+        <button className="customer-detail-back" onClick={onBack}>
+          <i className="ti ti-arrow-left" style={{ fontSize: 16 }} aria-hidden="true" />
+          Back to Customers
+        </button>
+
+        <Card className="customer-detail-hero">
+          <div className="customer-detail-hero-row">
+            <div className="customer-detail-identity">
+              <div className="customer-detail-avatar" aria-hidden="true">{customerInitials}</div>
+              <div className="customer-detail-identity-copy">
+                <div className="customer-detail-eyebrow">Customer Detail</div>
+                <h1 className="customer-detail-title">{displayName}</h1>
+                {locationLabel !== EMPTY_FIELD && <div className="customer-detail-location">{locationLabel}</div>}
+              </div>
             </div>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-              <Pill status={getCustomerStatusLabel(customer)} />
-              <span style={{ fontSize: ".78rem", color: B.gray }}>{relatedTickets.length} estimate{relatedTickets.length === 1 ? "" : "s"}</span>
-              <span style={{ fontSize: ".78rem", color: B.gray }}>{relatedJobs.length} job{relatedJobs.length === 1 ? "" : "s"}</span>
-              {canManageCustomer && (
-                <>
-                  <Btn sm v="outline" onClick={onEditCustomer} disabled={customerActionBusy}>Edit Customer</Btn>
-                  {customer.is_active !== false ? (
-                    <Btn sm v="danger" onClick={onDeactivateCustomer} disabled={customerActionBusy}>Deactivate Customer</Btn>
-                  ) : (
-                    <Btn sm v="green" onClick={onReactivateCustomer} disabled={customerActionBusy}>Reactivate Customer</Btn>
-                  )}
-                </>
-              )}
+            <div className="customer-detail-summary">
+              <div className="customer-detail-counter-grid">
+                <div className="customer-detail-counter">
+                  <div className="customer-detail-counter-label">Estimates</div>
+                  <div className="customer-detail-counter-value">{relatedTickets.length}</div>
+                </div>
+                <div className="customer-detail-counter">
+                  <div className="customer-detail-counter-label">Jobs</div>
+                  <div className="customer-detail-counter-value">{relatedJobs.length}</div>
+                </div>
+              </div>
+              <div className="customer-detail-summary-meta">
+                <Pill status={getCustomerStatusLabel(customer)} />
+                <span className="customer-detail-type">{formatCustomerTypeLabel(customer.customer_type)}</span>
+              </div>
             </div>
           </div>
+          {canManageCustomer && (
+            <div className="customer-detail-action-row">
+              <div className="customer-detail-action-spacer" />
+              <div className="customer-detail-action-group">
+                <Btn sm v="outline" onClick={onEditCustomer} disabled={customerActionBusy} style={{ borderRadius: 10 }}>
+                  Edit Customer
+                </Btn>
+                {customer.is_active !== false ? (
+                  <Btn sm v="danger" onClick={onDeactivateCustomer} disabled={customerActionBusy} style={{ borderRadius: 10 }}>
+                    Deactivate Customer
+                  </Btn>
+                ) : (
+                  <Btn sm v="green" onClick={onReactivateCustomer} disabled={customerActionBusy} style={{ borderRadius: 10 }}>
+                    Reactivate Customer
+                  </Btn>
+                )}
+              </div>
+            </div>
+          )}
           {!!customerActionError && (
-            <div style={{ marginTop: 12, fontSize: ".78rem", color: "#8A6A12", fontWeight: 700 }}>
+            <div className="customer-detail-error">
               {customerActionError}
             </div>
           )}
         </Card>
 
-        <div style={{ display: "grid", gridTemplateColumns: "1.05fr .95fr", gap: 16, alignItems: "start" }}>
-          <Card>
-            <div style={{ fontSize: ".82rem", fontWeight: 700, color: B.dark, textTransform: "uppercase", letterSpacing: .5, marginBottom: 12 }}>Customer Information</div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 12 }}>
-              {[
-                ["Display name", displayName],
-                ["Status", <Pill status={getCustomerStatusLabel(customer)} />],
-                ["Customer type", formatCustomerTypeLabel(customer.customer_type)],
-                ["First name", formatDisplayField(customer.first_name)],
-                ["Last name", formatDisplayField(customer.last_name)],
-                ["Company name", formatDisplayField(customer.company_name)],
-                ["Phone", phoneLink.href ? <a href={phoneLink.href} style={customerContactLinkStyle}>{phoneLink.display}</a> : phoneLink.display],
-                ["Email", emailLink.href ? <a href={emailLink.href} style={customerContactLinkStyle}>{emailLink.display}</a> : emailLink.display],
-                ["Street address", formatDisplayField(customer.street_address)],
-                ["City", formatDisplayField(customer.city)],
-                ["State", formatDisplayField(customer.state)],
-                ["Zip code", formatDisplayField(customer.zip_code)],
-                ["Created", customer.created_at ? formatDateTime(customer.created_at) : EMPTY_FIELD],
-                ["Last updated", customer.updated_at ? formatDateTime(customer.updated_at) : EMPTY_FIELD],
-              ].map(([label, value]) => (
-                <div key={label}>
-                  <div style={{ fontSize: ".7rem", color: B.gray, marginBottom: 2 }}>{label}</div>
-                  <div style={{ fontSize: ".84rem", color: B.dark, fontWeight: 700, lineHeight: 1.5 }}>{value}</div>
+        <div className="customer-detail-main-grid">
+          <Card className="customer-detail-card customer-detail-info-card">
+            <div className="customer-detail-section-head">
+              <div className="customer-detail-section-title">Customer Information</div>
+              <div className="customer-detail-section-subtitle">Current live record details and contact information.</div>
+            </div>
+            <div className="customer-detail-info-grid">
+              {customerFields.map(field => (
+                <div key={field.label} className="customer-detail-field">
+                  <div className="customer-detail-field-label">{field.label}</div>
+                  <div className={`customer-detail-field-value${field.empty ? " customer-detail-field-value--empty" : ""}`}>
+                    {field.value}
+                  </div>
                 </div>
               ))}
             </div>
-            <div style={{ marginTop: 14 }}>
-              <div style={{ fontSize: ".7rem", color: B.gray, marginBottom: 4 }}>Notes</div>
-              <div style={{ fontSize: ".84rem", color: B.mid, lineHeight: 1.6 }}>{formatDisplayField(customer.notes)}</div>
+            <div className="customer-detail-notes">
+              <div className="customer-detail-field-label">Notes</div>
+              <div className={`customer-detail-notes-value${formatDisplayField(customer.notes) === EMPTY_FIELD ? " customer-detail-field-value--empty" : ""}`}>
+                {formatDisplayField(customer.notes)}
+              </div>
             </div>
           </Card>
 
-          <Card>
-            <div style={{ fontSize: ".82rem", fontWeight: 700, color: B.dark, textTransform: "uppercase", letterSpacing: .5, marginBottom: 12 }}>Related Estimates</div>
+          <Card className="customer-detail-card customer-detail-estimates-card">
+            <div className="customer-detail-section-head">
+              <div className="customer-detail-section-title">Related Estimates</div>
+              <div className="customer-detail-section-subtitle">All live estimate records currently linked to this customer.</div>
+            </div>
             {relatedTickets.length === 0 ? (
-              <div style={{ fontSize: ".84rem", color: B.gray, fontWeight: 600 }}>No estimates are linked to this customer yet.</div>
+              <div className="customer-detail-empty">No estimates are linked to this customer yet.</div>
             ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <div className="customer-detail-record-list">
                 {relatedTickets.map(ticket => (
-                  <div key={ticket.id} style={{ padding: "12px 14px", borderRadius: 10, border: `1px solid ${B.border}`, background: B.white }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-                      <div>
-                        <div style={{ fontSize: ".86rem", fontWeight: 700, color: B.dark }}>{ticket.ptype || "Estimate"}</div>
-                        <div style={{ fontSize: ".74rem", color: B.gray, marginTop: 2 }}>{ticket.at ? fmtDateShort(ticket.at.slice(0, 10)) : EMPTY_FIELD} · {ticket.addr || EMPTY_FIELD}</div>
+                  <div key={ticket.id} className="customer-detail-record-card">
+                    <div className="customer-detail-record-head">
+                      <div className="customer-detail-record-copy">
+                        <div className="customer-detail-record-title">{ticket.ptype || "Estimate"}</div>
+                        <div className={`customer-detail-record-subtitle${!ticket.addr ? " customer-detail-field-value--empty" : ""}`}>
+                          {ticket.addr || EMPTY_FIELD}
+                        </div>
                       </div>
-                      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                      <div className="customer-detail-record-actions">
                         <Pill status={ticket.status} />
-                        <Btn sm v="outline" onClick={() => onOpenEstimate(ticket)}>View Estimate</Btn>
+                        <Btn sm v="outline" onClick={() => onOpenEstimate(ticket)} style={{ borderRadius: 10 }}>
+                          View Estimate
+                        </Btn>
                       </div>
                     </div>
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 10, marginTop: 10 }}>
-                      <div>
-                        <div style={{ fontSize: ".7rem", color: B.gray, marginBottom: 2 }}>Estimate date</div>
-                        <div style={{ fontSize: ".8rem", color: B.dark }}>{ticket.at ? fmtDate(ticket.at.slice(0, 10)) : EMPTY_FIELD}</div>
+                    <div className="customer-detail-meta-grid">
+                      <div className="customer-detail-meta-item">
+                        <div className="customer-detail-field-label">Estimate date</div>
+                        <div className={`customer-detail-meta-value${!ticket.at ? " customer-detail-field-value--empty" : ""}`}>
+                          {ticket.at ? fmtDate(ticket.at.slice(0, 10)) : EMPTY_FIELD}
+                        </div>
                       </div>
-                      <div>
-                        <div style={{ fontSize: ".7rem", color: B.gray, marginBottom: 2 }}>Job type</div>
-                        <div style={{ fontSize: ".8rem", color: B.dark }}>{ticket.ptype || EMPTY_FIELD}</div>
+                      <div className="customer-detail-meta-item">
+                        <div className="customer-detail-field-label">Project / job type</div>
+                        <div className={`customer-detail-meta-value${!ticket.ptype ? " customer-detail-field-value--empty" : ""}`}>
+                          {ticket.ptype || EMPTY_FIELD}
+                        </div>
                       </div>
-                      <div>
-                        <div style={{ fontSize: ".7rem", color: B.gray, marginBottom: 2 }}>Estimated amount</div>
-                        <div style={{ fontSize: ".8rem", color: B.dark }}>{formatEstimateAmountLabel(ticket)}</div>
+                      <div className="customer-detail-meta-item">
+                        <div className="customer-detail-field-label">Estimated amount</div>
+                        <div className={`customer-detail-meta-value${formatEstimateAmountLabel(ticket) === EMPTY_FIELD ? " customer-detail-field-value--empty" : ""}`}>
+                          {formatEstimateAmountLabel(ticket)}
+                        </div>
+                      </div>
+                      <div className="customer-detail-meta-item">
+                        <div className="customer-detail-field-label">Submitted</div>
+                        <div className={`customer-detail-meta-value${!ticket.at ? " customer-detail-field-value--empty" : ""}`}>
+                          {ticket.at ? fmtDateShort(ticket.at.slice(0, 10)) : EMPTY_FIELD}
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -2093,36 +2268,53 @@ function CustomerDetailView({
           </Card>
         </div>
 
-        <Card style={{ marginTop: 16 }}>
-          <div style={{ fontSize: ".82rem", fontWeight: 700, color: B.dark, textTransform: "uppercase", letterSpacing: .5, marginBottom: 12 }}>Related Jobs</div>
+        <Card className="customer-detail-card customer-detail-jobs-card">
+          <div className="customer-detail-section-head">
+            <div className="customer-detail-section-title">Related Jobs</div>
+            <div className="customer-detail-section-subtitle">Existing linked job records and current scheduled work details.</div>
+          </div>
           {relatedJobs.length === 0 ? (
-            <div style={{ fontSize: ".84rem", color: B.gray, fontWeight: 600 }}>No jobs are linked to this customer yet.</div>
+            <div className="customer-detail-empty">No jobs are linked to this customer yet.</div>
           ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <div className="customer-detail-record-list">
               {relatedJobs.map(job => (
-                <div key={job.id} style={{ padding: "12px 14px", borderRadius: 10, border: `1px solid ${B.border}`, background: B.white }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-                    <div>
-                      <div style={{ fontSize: ".86rem", fontWeight: 700, color: B.dark }}>{getCustomerJobDisplayName(job)}</div>
-                      <div style={{ fontSize: ".74rem", color: B.gray, marginTop: 2 }}>{job.job_address || EMPTY_FIELD}</div>
+                <div key={job.id} className="customer-detail-record-card">
+                  <div className="customer-detail-record-head">
+                    <div className="customer-detail-record-copy">
+                      <div className="customer-detail-record-title">{getCustomerJobDisplayName(job)}</div>
+                      <div className={`customer-detail-record-subtitle${!job.job_address ? " customer-detail-field-value--empty" : ""}`}>
+                        {job.job_address || EMPTY_FIELD}
+                      </div>
                     </div>
-                    <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                    <div className="customer-detail-record-actions">
                       <Pill status={job.status} />
-                      <Btn sm v="outline" onClick={() => onOpenJob(job.id)}>View Job</Btn>
+                      <Btn sm v="outline" onClick={() => onOpenJob(job.id)} style={{ borderRadius: 10 }}>
+                        View Job
+                      </Btn>
                     </div>
                   </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 10, marginTop: 10 }}>
-                    <div>
-                      <div style={{ fontSize: ".7rem", color: B.gray, marginBottom: 2 }}>Job type</div>
-                      <div style={{ fontSize: ".8rem", color: B.dark }}>{job.job_type || EMPTY_FIELD}</div>
+                  <div className="customer-detail-meta-grid customer-detail-meta-grid--jobs">
+                    <div className="customer-detail-meta-item">
+                      <div className="customer-detail-field-label">Job type</div>
+                      <div className={`customer-detail-meta-value${!job.job_type ? " customer-detail-field-value--empty" : ""}`}>
+                        {job.job_type || EMPTY_FIELD}
+                      </div>
                     </div>
-                    <div>
-                      <div style={{ fontSize: ".7rem", color: B.gray, marginBottom: 2 }}>Date scheduled</div>
-                      <div style={{ fontSize: ".8rem", color: B.dark }}>{getCustomerJobScheduledLabel(job)}</div>
+                    <div className="customer-detail-meta-item">
+                      <div className="customer-detail-field-label">Scheduled date / time</div>
+                      <div className={`customer-detail-meta-value${getCustomerJobScheduledLabel(job) === EMPTY_FIELD ? " customer-detail-field-value--empty" : ""}`}>
+                        {getCustomerJobScheduledLabel(job)}
+                      </div>
                     </div>
-                    <div>
-                      <div style={{ fontSize: ".7rem", color: B.gray, marginBottom: 2 }}>PO number</div>
-                      <div style={{ fontSize: ".8rem", color: B.dark }}>{getCustomerJobReference(job)}</div>
+                    <div className="customer-detail-meta-item">
+                      <div className="customer-detail-field-label">PO / WO number</div>
+                      <div className={`customer-detail-meta-value${getCustomerJobReference(job) === EMPTY_FIELD ? " customer-detail-field-value--empty" : ""}`}>
+                        {getCustomerJobReference(job)}
+                      </div>
+                    </div>
+                    <div className="customer-detail-meta-item">
+                      <div className="customer-detail-field-label">Status</div>
+                      <div className="customer-detail-meta-value">{job.status || EMPTY_FIELD}</div>
                     </div>
                   </div>
                 </div>
@@ -2900,6 +3092,9 @@ export default function AdminWorkspace({
   const [selectedJobId, setSelectedJobId] = useState(null);
   const [selectedCalendarJobId, setSelectedCalendarJobId] = useState(null);
   const [selectedCustomerId, setSelectedCustomerId] = useState(null);
+  const [quickViewCustomerId, setQuickViewCustomerId] = useState(null);
+  const [customerModalCustomerId, setCustomerModalCustomerId] = useState(null);
+  const [quickViewRestoreTarget, setQuickViewRestoreTarget] = useState(null);
   const [crews, setCrews] = useState([]);
   const jobsAccessEnabled = appRole !== "field";
   const customersAccessEnabled = canAccessEstimates(appRole);
@@ -2961,6 +3156,9 @@ export default function AdminWorkspace({
 
   const selectedTicket = tickets.find(ticket => ticket.id === selectedTicketId) || null;
   const selectedCustomer = customers.find(customer => customer.id === selectedCustomerId) || null;
+  const quickViewCustomer = customers.find(customer => customer.id === quickViewCustomerId) || null;
+  const customerModalCustomer = customers.find(customer => customer.id === customerModalCustomerId) || null;
+  const customerEditTarget = selectedCustomer || customerModalCustomer || null;
   const canManageCustomers = customersAccessEnabled;
   const findLoadedResidentialScheduleRow = jobDatabaseId => {
     if (!jobDatabaseId) return null;
@@ -2977,15 +3175,68 @@ export default function AdminWorkspace({
     return findLoadedResidentialScheduleRow(jobDatabaseId);
   };
   useEffect(() => {
-    if (!selectedCustomer) {
+    if (!customerEditTarget) {
       setCustomerEditOpen(false);
-      setCustomerDeactivateOpen(false);
       setCustomerEditSaving(false);
-      setCustomerLifecycleSaving(false);
       setCustomerEditError("");
+      setCustomerModalCustomerId(null);
+    }
+  }, [customerEditTarget]);
+  useEffect(() => {
+    if (!selectedCustomer) {
+      setCustomerDeactivateOpen(false);
+      setCustomerLifecycleSaving(false);
       setCustomerLifecycleError("");
     }
   }, [selectedCustomer]);
+  const closeQuickView = (restoreFocus = true) => {
+    const nextRestoreTarget = quickViewRestoreTarget;
+    setQuickViewCustomerId(null);
+    setQuickViewRestoreTarget(null);
+
+    if (restoreFocus && nextRestoreTarget?.isConnected && typeof nextRestoreTarget.focus === "function") {
+      window.setTimeout(() => {
+        nextRestoreTarget.focus();
+      }, 0);
+    }
+  };
+  const openQuickViewForCustomer = (customerId, triggerElement = null) => {
+    setQuickViewRestoreTarget(triggerElement || null);
+    setQuickViewCustomerId(customerId);
+  };
+  const openCustomerEdit = () => {
+    setCustomerModalCustomerId(null);
+    setCustomerEditError("");
+    setCustomerEditOpen(true);
+  };
+  const openQuickViewEdit = customerId => {
+    closeQuickView(false);
+    setSelectedCustomerId(null);
+    setCustomerModalCustomerId(customerId);
+    setCustomerEditError("");
+    setCustomerEditOpen(true);
+  };
+  const openFullCustomerFromQuickView = customerId => {
+    closeQuickView(false);
+    setCustomerModalCustomerId(null);
+    setSelectedCustomerId(customerId);
+  };
+  const navigateToAdminSection = nextSection => {
+    closeQuickView(false);
+    setSelectedCustomerId(null);
+    setCustomerModalCustomerId(null);
+    setCustomerEditOpen(false);
+    setCustomerEditSaving(false);
+    setCustomerEditError("");
+    setCustomerDeactivateOpen(false);
+    setCustomerLifecycleSaving(false);
+    setCustomerLifecycleError("");
+    setSection(nextSection);
+    if (nextSection !== "finance") {
+      setFinanceView("overview");
+    }
+    setMobileNavOpen(false);
+  };
   const hydrateResidentialJob = job => {
     if (!job || job.schedule_type !== "residential") {
       return job;
@@ -3036,11 +3287,19 @@ export default function AdminWorkspace({
 
   useEffect(() => {
     if (!allowedSections.some(item => item.id === section)) {
+      closeQuickView(false);
       setSection(defaultSection);
       setSelectedTicketId(null);
       setSelectedJobId(null);
       setSelectedCalendarJobId(null);
       setSelectedCustomerId(null);
+      setCustomerModalCustomerId(null);
+      setCustomerEditOpen(false);
+      setCustomerEditSaving(false);
+      setCustomerEditError("");
+      setCustomerDeactivateOpen(false);
+      setCustomerLifecycleSaving(false);
+      setCustomerLifecycleError("");
 
       if (typeof window !== "undefined") {
         window.sessionStorage.setItem(ADMIN_SECTION_STORAGE_KEY, defaultSection);
@@ -4178,19 +4437,14 @@ export default function AdminWorkspace({
     setPushPreview(null);
   };
 
-  const openCustomerEdit = () => {
-    setCustomerEditError("");
-    setCustomerEditOpen(true);
-  };
-
   const saveCustomerEdit = async draft => {
-    if (!selectedCustomer) return;
+    if (!customerEditTarget) return;
 
     setCustomerEditSaving(true);
     setCustomerEditError("");
 
     try {
-      await updateStoredCustomer(selectedCustomer.id, {
+      await updateStoredCustomer(customerEditTarget.id, {
         first_name: draft.first_name,
         last_name: draft.last_name,
         company_name: draft.company_name,
@@ -4204,6 +4458,9 @@ export default function AdminWorkspace({
         notes: draft.notes,
       });
       setCustomerEditOpen(false);
+      if (!selectedCustomer) {
+        setCustomerModalCustomerId(null);
+      }
     } catch (error) {
       setCustomerEditError(error instanceof Error ? error.message : "Unable to update customer.");
     } finally {
@@ -4336,11 +4593,11 @@ export default function AdminWorkspace({
         />
       );
     }
-    if (section === "dashboard") return <DashboardHomeSection tickets={tickets} jobs={jobs} events={allEvents} conflicts={activeConflicts} setSection={setSection} />;
+    if (section === "dashboard") return <DashboardHomeSection tickets={tickets} jobs={jobs} events={allEvents} conflicts={activeConflicts} setSection={navigateToAdminSection} />;
     if (section === "tickets") return <EstimateTicketsSection tickets={tickets} ticketsLoading={ticketsLoading} ticketsError={ticketsError} onSelectTicket={ticket => setSelectedTicketId(ticket.id)} onAcceptTicket={ticket => applyTicketStatus(ticket, "Estimate Accepted", "Estimate accepted and ready for office scheduling.")} onScheduleTicket={openResidentialSchedule} jobs={jobs} scheduledEstimateDatabaseIds={scheduledEstimateDatabaseIds} />;
     if (section === "calendar") return <CalendarSection events={scheduleEvents} crews={crews} onOpenJob={jobId => setSelectedCalendarJobId(jobId)} pendingResidentialDraft={canManageSchedule ? residentialDraft : null} onPendingResidentialDraftChange={setResidentialDraft} onSavePendingResidentialSchedule={saveResidentialSchedule} onCancelPendingResidentialSchedule={() => setResidentialDraft(null)} pendingBuilderSchedule={canManageSchedule ? builderScheduleDraft : null} onPendingBuilderScheduleChange={setBuilderScheduleDraft} onSavePendingBuilderSchedule={saveBuilderSchedule} onCancelPendingBuilderSchedule={() => setBuilderScheduleDraft(null)} readOnly={calendarReadOnly} loading={scheduleLoading} error={scheduleError} />;
     if (section === "jobs") return <JobsSection jobs={jobs} loading={jobsLoading} error={jobsError} onSelectJob={jobId => setSelectedJobId(jobId)} onCreateBuilderJob={openBuilderJobModal} canCreateBuilderJob={canManageSchedule} />;
-    if (section === "customers") return <CustomersSection customers={customers} loading={customersLoading} error={customersError} tickets={tickets} jobs={jobs} onSelectCustomer={customerId => setSelectedCustomerId(customerId)} search={customerSearch} onSearchChange={setCustomerSearch} typeFilter={customerTypeFilter} onTypeFilterChange={setCustomerTypeFilter} statusFilter={customerStatusFilter} onStatusFilterChange={setCustomerStatusFilter} />;
+    if (section === "customers") return <CustomersSection customers={customers} loading={customersLoading} error={customersError} tickets={tickets} jobs={jobs} onSelectCustomer={openQuickViewForCustomer} search={customerSearch} onSearchChange={setCustomerSearch} typeFilter={customerTypeFilter} onTypeFilterChange={setCustomerTypeFilter} statusFilter={customerStatusFilter} onStatusFilterChange={setCustomerStatusFilter} />;
     if (section === "crews") return <CrewsSection crews={crews} jobs={jobs} onCreateCrew={createCrew} onUpdateCrew={updateCrew} />;
     if (section === "builders") return <BuildersSection builders={builders} buildersLoading={buildersLoading} buildersError={buildersError} jobs={jobs} onCreateBuilderJob={openBuilderJobModal} onCreateBuilder={() => setBuilderRecordDraft({ name: "", contact: "", phone: "", communities: "" })} onOpenJob={jobId => setSelectedJobId(jobId)} />;
     if (section === "finance") return <FinanceDashboard financeView={financeView} onFinanceViewChange={setFinanceView} />;
@@ -4349,14 +4606,11 @@ export default function AdminWorkspace({
 
   return (
     <div className="admin-page-shell" style={{ minHeight: "100vh", background: "#F4F6F3" }}>
-      {!selectedTicket && !selectedJob && !selectedCalendarJob && !selectedCustomer && (
+      {!selectedTicket && !selectedJob && !selectedCalendarJob && (
         <div className="admin-shell">
           <AdminSidebar
             section={section}
-            setSection={next => {
-              setSection(next);
-              if (next !== "finance") setFinanceView("overview");
-            }}
+            setSection={navigateToAdminSection}
             financeView={financeView}
             setFinanceView={setFinanceView}
             alerts={jobsNeedingAttention}
@@ -4382,19 +4636,35 @@ export default function AdminWorkspace({
           </div>
         </div>
       )}
-      {(selectedTicket || selectedJob || selectedCalendarJob || selectedCustomer) && content}
+      {(selectedTicket || selectedJob || selectedCalendarJob) && content}
+
+      {quickViewCustomer && (
+        <CustomerQuickViewModal
+          customer={quickViewCustomer}
+          tickets={tickets}
+          jobs={jobs}
+          canManageCustomer={canManageCustomers}
+          customerActionBusy={customerEditSaving}
+          onClose={() => closeQuickView(true)}
+          onEditCustomer={() => openQuickViewEdit(quickViewCustomer.id)}
+          onOpenFullCustomer={() => openFullCustomerFromQuickView(quickViewCustomer.id)}
+        />
+      )}
 
       {canManageSchedule && builderDraft && <BuilderJobModal draft={builderDraft} crews={crews} builders={builders} onClose={() => setBuilderDraft(null)} onSave={createBuilderJob} />}
       {hasFullAccess(appRole) && builderRecordDraft && <BuilderRecordModal draft={builderRecordDraft} onClose={() => setBuilderRecordDraft(null)} onSave={createBuilderRecord} />}
-      {selectedCustomer && customerEditOpen && (
+      {customerEditTarget && customerEditOpen && (
         <CustomerEditModal
-          customer={selectedCustomer}
+          customer={customerEditTarget}
           saving={customerEditSaving}
           error={customerEditError}
           onClose={() => {
             if (customerEditSaving) return;
             setCustomerEditOpen(false);
             setCustomerEditError("");
+            if (!selectedCustomer) {
+              setCustomerModalCustomerId(null);
+            }
           }}
           onSave={saveCustomerEdit}
         />

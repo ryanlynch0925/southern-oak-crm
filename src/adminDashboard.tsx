@@ -114,6 +114,45 @@ function buildInitials(fullName, email) {
   return "U";
 }
 
+const VALIDATION_COLOR = "#922B21";
+const VALIDATION_BORDER = "#E5C3BD";
+const VALIDATION_BG = "#FFF7F5";
+const VALIDATION_RING = "0 0 0 3px rgba(192,57,43,0.12)";
+
+function getErrorInputStyle(hasError, overrides = {}) {
+  return {
+    ...INP,
+    ...(hasError ? { borderColor: VALIDATION_COLOR, boxShadow: VALIDATION_RING } : null),
+    ...overrides,
+  };
+}
+
+function FormValidationMessage({ message, id, style = {} }) {
+  if (!message) {
+    return null;
+  }
+
+  return (
+    <div
+      id={id}
+      className="admin-form-validation"
+      style={{
+        border: `1px solid ${VALIDATION_BORDER}`,
+        background: VALIDATION_BG,
+        borderRadius: 8,
+        padding: "10px 12px",
+        fontSize: ".74rem",
+        lineHeight: 1.5,
+        color: VALIDATION_COLOR,
+        fontWeight: 700,
+        ...style,
+      }}
+    >
+      {message}
+    </div>
+  );
+}
+
 const ESTIMATE_STATUSES = [
   "New Request",
   "Needs Review",
@@ -354,7 +393,7 @@ function Logo({ sm = false }) {
 
 function Pill({ status, label }) {
   const cfg = STATUS_STYLES[status] || { c: "#555", bg: "#eee" };
-  return <span style={{ display: "inline-block", padding: "3px 10px", borderRadius: 20, background: cfg.bg, color: cfg.c, fontWeight: 700, fontSize: ".68rem", whiteSpace: "nowrap" }}>{label || status}</span>;
+  return <span className="status-pill" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", padding: "5px 10px", borderRadius: 999, background: cfg.bg, color: cfg.c, fontWeight: 700, fontSize: ".68rem", lineHeight: 1, whiteSpace: "nowrap", width: "fit-content", height: "auto" }}>{label || status}</span>;
 }
 
 function getCustomerStatusLabel(customer) {
@@ -1308,15 +1347,36 @@ function TicketDetailView({ ticket, onBack, onUpdateTicket, onOpenSchedule, sour
   );
 }
 
-function CalendarSection({ events, crews, onOpenJob, pendingResidentialDraft, onPendingResidentialDraftChange, onSavePendingResidentialSchedule, onCancelPendingResidentialSchedule, pendingBuilderSchedule, onPendingBuilderScheduleChange, onSavePendingBuilderSchedule, onCancelPendingBuilderSchedule, readOnly = false, loading = false, error = "" }) {
+function CalendarSection({
+  events,
+  crews,
+  onOpenJob,
+  pendingResidentialDraft,
+  onPendingResidentialDraftChange,
+  onSavePendingResidentialSchedule,
+  onCancelPendingResidentialSchedule,
+  pendingBuilderSchedule,
+  onPendingBuilderScheduleChange,
+  onSavePendingBuilderSchedule,
+  onCancelPendingBuilderSchedule,
+  readOnly = false,
+  loading = false,
+  error = "",
+  residentialValidation = null,
+  onResidentialValidationReset = () => {},
+  builderValidation = null,
+  onBuilderValidationReset = () => {},
+}) {
   const [view, setView] = useState("month");
   const [anchorDate, setAnchorDate] = useState(todayIso());
   const [filters, setFilters] = useState({ crewId: "All", builderId: "All", scheduleType: "All", jobType: "All", status: "All" });
   const schedulingLocked = !readOnly && (!!pendingResidentialDraft || !!pendingBuilderSchedule);
+  const activeDraftDate = pendingResidentialDraft?.scheduled_date || pendingBuilderSchedule?.scheduled_date || "";
   const builderNames = useMemo(
     () => [...new Set(events.map((event) => event.builder_name).filter(Boolean))].sort((first, second) => first.localeCompare(second)),
     [events]
   );
+
   useEffect(() => {
     const activeDraft = pendingResidentialDraft || pendingBuilderSchedule;
     if (activeDraft?.scheduled_date) {
@@ -1324,6 +1384,20 @@ function CalendarSection({ events, crews, onOpenJob, pendingResidentialDraft, on
       setFilters(prev => ({ ...prev, scheduleType: prev.scheduleType === "builder_slab" ? "All" : prev.scheduleType }));
     }
   }, [pendingResidentialDraft?.scheduled_date, pendingBuilderSchedule?.scheduled_date]);
+
+  useEffect(() => {
+    if (!residentialValidation?.field) return;
+    const targetId = residentialValidation.field === "reschedule_reason"
+      ? "residential-schedule-reschedule-reason-preset"
+      : `residential-schedule-${residentialValidation.field}`;
+    requestAnimationFrame(() => document.getElementById(targetId)?.focus());
+  }, [residentialValidation?.field, pendingResidentialDraft?.scheduleEventDatabaseId]);
+
+  useEffect(() => {
+    if (!builderValidation?.field) return;
+    requestAnimationFrame(() => document.getElementById(`builder-schedule-${builderValidation.field}`)?.focus());
+  }, [builderValidation?.field]);
+
   const filtered = events.filter(event => {
     if (filters.crewId !== "All" && event.crew_id !== filters.crewId) return false;
     if (filters.builderId !== "All" && event.builder_name !== filters.builderId) return false;
@@ -1337,7 +1411,6 @@ function CalendarSection({ events, crews, onOpenJob, pendingResidentialDraft, on
   const year = monthStart.getFullYear();
   const month = monthStart.getMonth();
   const firstOfMonth = new Date(year, month, 1);
-  const lastOfMonth = new Date(year, month + 1, 0);
   const gridStart = new Date(firstOfMonth);
   gridStart.setDate(firstOfMonth.getDate() - firstOfMonth.getDay());
   const monthDays = [];
@@ -1367,236 +1440,318 @@ function CalendarSection({ events, crews, onOpenJob, pendingResidentialDraft, on
     setAnchorDate(iso);
     if (readOnly) return;
     if (pendingResidentialDraft) {
+      onResidentialValidationReset();
       onPendingResidentialDraftChange({ ...pendingResidentialDraft, scheduled_date: iso });
     }
     if (pendingBuilderSchedule) {
+      onBuilderValidationReset();
       onPendingBuilderScheduleChange({ ...pendingBuilderSchedule, scheduled_date: iso });
     }
+  };
+  const rangeLabel = view === "month"
+    ? new Date(`${anchorDate}T12:00:00`).toLocaleDateString("en-US", { month: "long", year: "numeric" })
+    : view === "week"
+      ? `Week of ${fmtDate(anchorDate)}`
+      : fmtDate(anchorDate);
+  const residentialExistingReason = String(pendingResidentialDraft?.last_reschedule_reason || "").trim();
+  const residentialSummaryError = residentialValidation && !residentialValidation.field ? residentialValidation.message : "";
+  const builderSummaryError = builderValidation && !builderValidation.field ? builderValidation.message : "";
+  const getEventTitle = event => event.customer_name || event.builder_name || event.title;
+  const getEventSubtitle = event => event.schedule_type === "builder_slab" ? (event.phase_label || "Builder phase") : (event.job_type || "Residential");
+  const getEventMeta = event => `${event.time || "-"} · Crew ${findCrewById(crews, event.crew_id)?.number || "-"}`;
+  const handleResidentialDraftChange = patch => {
+    onResidentialValidationReset();
+    onPendingResidentialDraftChange({ ...pendingResidentialDraft, ...patch });
+  };
+  const handleBuilderDraftChange = patch => {
+    onBuilderValidationReset();
+    onPendingBuilderScheduleChange({ ...pendingBuilderSchedule, ...patch });
   };
 
   return (
     <>
-      <Card style={{ marginBottom: 14 }}>
-        <div className="calendar-controls" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-          <div>
-            <h1 style={{ fontSize: "1.25rem", fontWeight: 700, color: B.dark, marginBottom: 4 }}>Calendar Schedule</h1>
-            <p style={{ fontSize: ".8rem", color: B.gray }}>View residential jobs and builder slab phases by month, week, or day with crew and builder filters.</p>
+      <Card className="calendar-header-card" style={{ marginBottom: 14 }}>
+        <div className="calendar-header-top">
+          <div className="calendar-header-copy">
+            <h1 style={{ fontSize: "1.3rem", fontWeight: 700, color: B.dark, margin: 0 }}>Calendar Schedule</h1>
+            <p style={{ fontSize: ".82rem", color: B.gray, margin: "6px 0 0" }}>View residential jobs and builder slab phases by month, week, or day with crew and builder filters.</p>
           </div>
           <div className="calendar-view-toggle" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             {["month", "week", "day"].map(item => (
-              <button className="oak-button" key={item} onClick={() => setView(item)} style={{ padding: "8px 12px", borderRadius: 6, border: `1.5px solid ${view === item ? B.green : B.border}`, background: view === item ? "#e9e0ca" : B.white, color: view === item ? B.green : B.mid, fontWeight: 700, fontSize: ".76rem", cursor: "pointer", fontFamily: "inherit", textTransform: "capitalize" }}>
+              <button
+                className={`oak-button calendar-view-button${view === item ? " is-active" : ""}`}
+                key={item}
+                onClick={() => setView(item)}
+                style={{ padding: "9px 14px", borderRadius: 8, border: `1.5px solid ${view === item ? B.green : B.border}`, background: view === item ? "#e9e0ca" : B.white, color: view === item ? B.green : B.mid, fontWeight: 700, fontSize: ".77rem", cursor: "pointer", fontFamily: "inherit", textTransform: "capitalize" }}
+              >
                 {item}
               </button>
             ))}
           </div>
         </div>
-        <div className="calendar-filters" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))", gap: 10, marginTop: 12 }}>
-          <select value={filters.crewId} onChange={e => setFilters(prev => ({ ...prev, crewId: e.target.value }))} style={{ ...INP, cursor: "pointer" }}>
-            <option value="All">All crews</option>
-            {crews.map(crew => <option key={crew.id} value={crew.id}>{crew.name}</option>)}
-          </select>
-          <select value={filters.builderId} onChange={e => setFilters(prev => ({ ...prev, builderId: e.target.value }))} style={{ ...INP, cursor: "pointer" }}>
-            <option value="All">All builders</option>
-            {builderNames.map(builderName => <option key={builderName} value={builderName}>{builderName}</option>)}
-          </select>
-          <select value={filters.scheduleType} onChange={e => setFilters(prev => ({ ...prev, scheduleType: e.target.value }))} style={{ ...INP, cursor: "pointer" }}>
-            <option value="All">Residential and builder jobs</option>
-            <option value="residential">Residential jobs</option>
-            <option value="builder_slab">Builder jobs</option>
-          </select>
-          <select value={filters.status} onChange={e => setFilters(prev => ({ ...prev, status: e.target.value }))} style={{ ...INP, cursor: "pointer" }}>
-            <option value="All">All statuses</option>
-            {JOB_STATUSES.map(status => <option key={status} value={status}>{status}</option>)}
-          </select>
+        <div className="calendar-filters" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(170px,1fr))", gap: 10, marginTop: 14 }}>
+          <label className="calendar-filter-field">
+            <span className="calendar-filter-label">Crew</span>
+            <select value={filters.crewId} onChange={e => setFilters(prev => ({ ...prev, crewId: e.target.value }))} style={{ ...INP, cursor: "pointer" }}>
+              <option value="All">All crews</option>
+              {crews.map(crew => <option key={crew.id} value={crew.id}>{crew.name}</option>)}
+            </select>
+          </label>
+          <label className="calendar-filter-field">
+            <span className="calendar-filter-label">Builder</span>
+            <select value={filters.builderId} onChange={e => setFilters(prev => ({ ...prev, builderId: e.target.value }))} style={{ ...INP, cursor: "pointer" }}>
+              <option value="All">All builders</option>
+              {builderNames.map(builderName => <option key={builderName} value={builderName}>{builderName}</option>)}
+            </select>
+          </label>
+          <label className="calendar-filter-field">
+            <span className="calendar-filter-label">Work type</span>
+            <select value={filters.scheduleType} onChange={e => setFilters(prev => ({ ...prev, scheduleType: e.target.value }))} style={{ ...INP, cursor: "pointer" }}>
+              <option value="All">Residential and builder jobs</option>
+              <option value="residential">Residential jobs</option>
+              <option value="builder_slab">Builder jobs</option>
+            </select>
+          </label>
+          <label className="calendar-filter-field">
+            <span className="calendar-filter-label">Status</span>
+            <select value={filters.status} onChange={e => setFilters(prev => ({ ...prev, status: e.target.value }))} style={{ ...INP, cursor: "pointer" }}>
+              <option value="All">All statuses</option>
+              {JOB_STATUSES.map(status => <option key={status} value={status}>{status}</option>)}
+            </select>
+          </label>
         </div>
       </Card>
 
       {readOnly && (
-        <Card style={{ marginBottom: 14, background: "#F7F6F0" }}>
+        <Card className="calendar-readonly-card" style={{ marginBottom: 14, background: "#F7F6F0" }}>
           <div style={{ fontSize: ".82rem", color: B.mid, fontWeight: 700 }}>Field view is read-only.</div>
           <div style={{ fontSize: ".76rem", color: B.gray, marginTop: 3 }}>Scheduled work details are available, but creating, editing, rescheduling, deleting, and crew assignment controls are disabled for this role.</div>
         </Card>
       )}
 
       <div className="calendar-layout" style={{ display: "grid", gridTemplateColumns: schedulingLocked ? "minmax(0,1fr) 320px" : "1fr", gap: 14 }}>
-      <Card className="admin-section-card calendar-main-card">
-        <div className="calendar-controls" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
-          <div className="calendar-nav-controls" style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <Btn sm v="outline" onClick={() => shiftView(-1)}><i className="ti ti-chevron-left" aria-hidden="true" /></Btn>
-            <Btn sm v="outline" onClick={() => setAnchorDate(todayIso())}>Today</Btn>
-            <Btn sm v="outline" onClick={() => shiftView(1)}><i className="ti ti-chevron-right" aria-hidden="true" /></Btn>
+        <Card className="admin-section-card calendar-main-card">
+          <div className="calendar-main-toolbar" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 18, flexWrap: "wrap" }}>
+            <div className="calendar-nav-controls" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <span className="calendar-nav-label">Browse</span>
+              <Btn sm v="outline" onClick={() => shiftView(-1)}><i className="ti ti-chevron-left" aria-hidden="true" /></Btn>
+              <Btn sm v="outline" onClick={() => setAnchorDate(todayIso())}>Today</Btn>
+              <Btn sm v="outline" onClick={() => shiftView(1)}><i className="ti ti-chevron-right" aria-hidden="true" /></Btn>
+            </div>
+            <div className="calendar-range-title" style={{ fontSize: "1rem", fontWeight: 700, color: B.dark }}>{rangeLabel}</div>
           </div>
-          <div style={{ fontSize: ".92rem", fontWeight: 700, color: B.dark }}>
-            {view === "month" && new Date(`${anchorDate}T12:00:00`).toLocaleDateString("en-US", { month: "long", year: "numeric" })}
-            {view === "week" && `Week of ${fmtDate(anchorDate)}`}
-            {view === "day" && fmtDate(anchorDate)}
-          </div>
-        </div>
 
-        {loading && (
-          <div style={{ fontSize: ".84rem", color: B.gray, fontWeight: 600 }}>
-            Loading calendar...
-          </div>
-        )}
+          {loading && <div className="calendar-state-copy" style={{ fontSize: ".84rem", color: B.gray, fontWeight: 600 }}>Loading calendar...</div>}
+          {!loading && error && <div className="calendar-state-copy" style={{ fontSize: ".84rem", color: "#8A6A12", fontWeight: 700 }}>Unable to load calendar.</div>}
+          {!loading && !error && filtered.length === 0 && <div className="calendar-state-copy" style={{ fontSize: ".84rem", color: B.gray, fontWeight: 600 }}>No scheduled work found.</div>}
 
-        {!loading && error && (
-          <div style={{ fontSize: ".84rem", color: "#8A6A12", fontWeight: 700 }}>
-            Unable to load calendar.
-          </div>
-        )}
+          {!loading && !error && filtered.length > 0 && view === "month" && (
+            <div className="calendar-scroll-wrapper">
+              <div className="calendar-month-grid" style={{ display: "grid", gridTemplateColumns: "repeat(7,minmax(0,1fr))", gap: 8 }}>
+                {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map(day => <div key={day} className="calendar-weekday-label">{day}</div>)}
+                {monthDays.map(day => {
+                  const isSelectedDay = anchorDate === day.iso;
+                  const isDraftDay = activeDraftDate === day.iso;
+                  return (
+                    <div
+                      className={`calendar-day-card${day.inMonth ? "" : " is-outside-month"}${isSelectedDay ? " is-selected" : ""}${isDraftDay ? " is-draft-target" : ""}`}
+                      key={day.iso}
+                      onClick={() => pickScheduleDate(day.iso)}
+                      style={{ minHeight: 132, border: `1px solid ${isDraftDay ? B.bronze : isSelectedDay ? B.green : B.border}`, borderRadius: 10, padding: 10, background: day.inMonth ? B.white : B.sand, cursor: readOnly ? "default" : "pointer", boxShadow: isDraftDay ? `inset 0 0 0 1px ${B.bronze}` : "none" }}
+                    >
+                      <div className="calendar-day-card-head">
+                        <span className={`calendar-day-number${isWeekend(day.iso) ? " is-weekend" : ""}${todayIso() === day.iso ? " is-today" : ""}`}>{new Date(`${day.iso}T12:00:00`).getDate()}</span>
+                        <span className={`calendar-day-count${isDraftDay ? " is-pending" : ""}`}>{day.events.length > 0 ? `${day.events.length} item${day.events.length === 1 ? "" : "s"}` : isDraftDay ? "Selected" : ""}</span>
+                      </div>
+                      <div className="calendar-day-events">
+                        {day.events.length === 0 && <div className="calendar-empty-copy">No scheduled work</div>}
+                        {day.events.slice(0, 3).map(event => (
+                          <button
+                            className={`calendar-event calendar-event--month${event.schedule_type === "builder_slab" ? " is-builder" : " is-residential"}`}
+                            key={event.id}
+                            onClick={e => {
+                              e.stopPropagation();
+                              if (!schedulingLocked) onOpenJob(event.jobId);
+                            }}
+                            style={{ background: eventColor(event), color: B.white, border: "none", borderRadius: 8, fontSize: ".66rem", padding: "7px 8px", textAlign: "left", cursor: schedulingLocked ? "default" : "pointer" }}
+                          >
+                            <div className="calendar-event-title">{getEventTitle(event)}</div>
+                            <div className="calendar-event-subtitle">{getEventSubtitle(event)}</div>
+                            <div className="calendar-event-meta">{getEventMeta(event)}</div>
+                          </button>
+                        ))}
+                        {day.events.length > 3 && <div className="calendar-more-copy">+{day.events.length - 3} more</div>}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
-        {!loading && !error && filtered.length === 0 && (
-          <div style={{ fontSize: ".84rem", color: B.gray, fontWeight: 600 }}>
-            No scheduled work found.
-          </div>
-        )}
+          {!loading && !error && filtered.length > 0 && view === "week" && (
+            <div className="calendar-scroll-wrapper">
+              <div className="calendar-week-grid" style={{ display: "grid", gridTemplateColumns: "repeat(7,minmax(0,1fr))", gap: 10 }}>
+                {weekDays.map(day => {
+                  const isSelectedDay = anchorDate === day.iso;
+                  const isDraftDay = activeDraftDate === day.iso;
+                  return (
+                    <div
+                      className={`calendar-day-card calendar-day-card--week${isSelectedDay ? " is-selected" : ""}${isDraftDay ? " is-draft-target" : ""}`}
+                      key={day.iso}
+                      onClick={() => pickScheduleDate(day.iso)}
+                      style={{ border: `1px solid ${isDraftDay ? B.bronze : isSelectedDay ? B.green : B.border}`, borderRadius: 10, padding: 12, minHeight: 280, cursor: readOnly ? "default" : "pointer" }}
+                    >
+                      <div className="calendar-week-day-heading">
+                        <div className={`calendar-week-day-label${isWeekend(day.iso) ? " is-weekend" : ""}`}>{fmtDateShort(day.iso)}</div>
+                        <div className="calendar-week-day-count">{day.events.length ? `${day.events.length} scheduled` : "Open"}</div>
+                      </div>
+                      <div className="calendar-day-events calendar-day-events--week">
+                        {day.events.length === 0 && <div className="calendar-empty-copy">No scheduled work.</div>}
+                        {day.events.map(event => (
+                          <button
+                            className={`calendar-event calendar-event--week${event.schedule_type === "builder_slab" ? " is-builder" : " is-residential"}`}
+                            key={event.id}
+                            onClick={e => {
+                              e.stopPropagation();
+                              if (!schedulingLocked) onOpenJob(event.jobId);
+                            }}
+                            style={{ background: `${eventColor(event)}14`, color: B.dark, border: `1px solid ${eventColor(event)}30`, borderRadius: 8, padding: "10px 10px 9px", textAlign: "left", cursor: schedulingLocked ? "default" : "pointer" }}
+                          >
+                            <div className="calendar-event-title">{getEventTitle(event)}</div>
+                            <div className="calendar-event-subtitle">{getEventSubtitle(event)}</div>
+                            <div className="calendar-event-meta">{getEventMeta(event)}</div>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
-        {!loading && !error && filtered.length > 0 && view === "month" && (
-          <div className="calendar-scroll-wrapper">
-          <div className="calendar-month-grid" style={{ display: "grid", gridTemplateColumns: "repeat(7,minmax(0,1fr))", gap: 8 }}>
-            {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map(day => <div key={day} style={{ fontSize: ".72rem", color: B.gray, fontWeight: 700, textTransform: "uppercase", padding: "0 4px 4px" }}>{day}</div>)}
-            {monthDays.map(day => (
-              <div className="calendar-day-card" key={day.iso} onClick={() => pickScheduleDate(day.iso)} style={{ minHeight: 124, border: `1px solid ${(pendingResidentialDraft?.scheduled_date === day.iso || pendingBuilderSchedule?.scheduled_date === day.iso) ? B.bronze : anchorDate === day.iso ? B.green : B.border}`, borderRadius: 8, padding: 8, background: day.inMonth ? B.white : B.sand, cursor: readOnly ? "default" : "pointer", boxShadow: (pendingResidentialDraft?.scheduled_date === day.iso || pendingBuilderSchedule?.scheduled_date === day.iso) ? `inset 0 0 0 1px ${B.bronze}` : "none" }}>
-                <div style={{ fontSize: ".74rem", fontWeight: 700, color: isWeekend(day.iso) ? "#922B21" : B.dark, marginBottom: 8, display: "flex", justifyContent: "space-between" }}>
-                  <span>{new Date(`${day.iso}T12:00:00`).getDate()}</span>
-                  <span style={{ color: (pendingResidentialDraft?.scheduled_date === day.iso || pendingBuilderSchedule?.scheduled_date === day.iso) ? B.bronze : B.gray }}>{day.events.length > 0 ? day.events.length : (pendingResidentialDraft?.scheduled_date === day.iso || pendingBuilderSchedule?.scheduled_date === day.iso) ? "Pick" : ""}</span>
+          {!loading && !error && filtered.length > 0 && view === "day" && (
+            <div className="calendar-day-list">
+              {schedulingLocked && <button onClick={() => pickScheduleDate(anchorDate)} style={{ alignSelf: "flex-start", background: `${B.bronze}12`, border: `1px solid ${B.bronze}40`, color: B.bronze, borderRadius: 8, padding: "8px 12px", cursor: "pointer", fontFamily: "inherit", fontWeight: 700, fontSize: ".76rem" }}>Use {fmtDate(anchorDate)} for this job</button>}
+              {dayEvents.length === 0 && <div className="calendar-state-copy" style={{ fontSize: ".82rem", color: B.gray }}>No work scheduled for {fmtDate(anchorDate)}.</div>}
+              {dayEvents.map(event => (
+                <Card key={event.id} className={`calendar-event calendar-event--day${event.schedule_type === "builder_slab" ? " is-builder" : " is-residential"}`} style={{ padding: 16, background: `${eventColor(event)}10`, borderColor: `${eventColor(event)}35` }}>
+                  <div className="calendar-day-event-row">
+                    <div>
+                      <div className="calendar-event-title calendar-event-title--day">{getEventTitle(event)}</div>
+                      <div className="calendar-event-subtitle calendar-event-subtitle--day">{event.schedule_type === "builder_slab" ? (event.community ? `${event.phase_label} · ${event.community}` : event.phase_label) : `${event.job_type} · ${event.address}`}</div>
+                    </div>
+                    <div className="calendar-day-event-actions">
+                      <span className="calendar-day-event-meta">{`${event.time} · Crew ${findCrewById(crews, event.crew_id)?.number || "-"} · ${fmtCap(event.capacity_used)}`}</span>
+                      <Pill status={event.status} />
+                      {!schedulingLocked && <Btn sm v="outline" onClick={() => onOpenJob(event.jobId)}>Open job</Btn>}
+                    </div>
+                  </div>
+                </Card>
+              ))}
+            </div>
+          )}
+        </Card>
+
+        {!readOnly && pendingResidentialDraft && (
+          <Card className="calendar-side-panel admin-section-card" style={{ alignSelf: "start", position: "sticky", top: 18 }}>
+            <div className="calendar-side-panel-header">
+              <div style={{ fontSize: ".82rem", fontWeight: 700, color: B.dark, textTransform: "uppercase", letterSpacing: .5 }}>Schedule Residential Job</div>
+              <div style={{ fontSize: ".92rem", fontWeight: 700, color: B.dark }}>{pendingResidentialDraft.customer_name}</div>
+              <div style={{ fontSize: ".76rem", color: B.gray }}>{pendingResidentialDraft.job_type}</div>
+            </div>
+            <FormValidationMessage message={residentialSummaryError} style={{ marginBottom: 12 }} />
+            <div className="calendar-side-panel-form">
+              <div>
+                <label htmlFor="residential-schedule-scheduled_date" style={labelStyle}>Scheduled date</label>
+                <input id="residential-schedule-scheduled_date" aria-invalid={residentialValidation?.field === "scheduled_date" || undefined} style={getErrorInputStyle(residentialValidation?.field === "scheduled_date")} type="date" value={pendingResidentialDraft.scheduled_date} onChange={e => handleResidentialDraftChange({ scheduled_date: e.target.value })} />
+                <div style={{ fontSize: ".7rem", color: B.gray, marginTop: 4 }}>Click a date in the calendar to schedule from the live view.</div>
+                {residentialValidation?.field === "scheduled_date" && <div style={{ fontSize: ".72rem", color: VALIDATION_COLOR, marginTop: 6, fontWeight: 700 }}>{residentialValidation.message}</div>}
+              </div>
+              <div>
+                <label htmlFor="residential-schedule-scheduled_time" style={labelStyle}>Start time</label>
+                <input id="residential-schedule-scheduled_time" aria-invalid={residentialValidation?.field === "scheduled_time" || undefined} style={getErrorInputStyle(residentialValidation?.field === "scheduled_time")} type="time" value={pendingResidentialDraft.scheduled_time} onChange={e => handleResidentialDraftChange({ scheduled_time: e.target.value })} />
+                {residentialValidation?.field === "scheduled_time" && <div style={{ fontSize: ".72rem", color: VALIDATION_COLOR, marginTop: 6, fontWeight: 700 }}>{residentialValidation.message}</div>}
+              </div>
+              <div>
+                <label htmlFor="residential-schedule-crew_id" style={labelStyle}>Crew</label>
+                <select id="residential-schedule-crew_id" aria-invalid={residentialValidation?.field === "crew_id" || undefined} style={getErrorInputStyle(residentialValidation?.field === "crew_id", { cursor: "pointer" })} value={pendingResidentialDraft.crew_id} onChange={e => handleResidentialDraftChange({ crew_id: e.target.value })}>
+                  {crews.map(crew => <option key={crew.id} value={crew.id}>{crew.name}</option>)}
+                </select>
+                {residentialValidation?.field === "crew_id" && <div style={{ fontSize: ".72rem", color: VALIDATION_COLOR, marginTop: 6, fontWeight: 700 }}>{residentialValidation.message}</div>}
+              </div>
+              <div className="calendar-side-panel-grid">
+                <div>
+                  <label htmlFor="residential-schedule-estimated_duration" style={labelStyle}>Estimated duration (days)</label>
+                  <input id="residential-schedule-estimated_duration" style={INP} type="number" step="0.25" value={pendingResidentialDraft.estimated_duration} onChange={e => handleResidentialDraftChange({ estimated_duration: Number(e.target.value || 0.25) })} />
                 </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                  {day.events.slice(0, 3).map(event => (
-                    <button className="calendar-event" key={event.id} onClick={e => { e.stopPropagation(); if (!schedulingLocked) onOpenJob(event.jobId); }} style={{ background: eventColor(event), color: B.white, border: "none", borderRadius: 6, fontSize: ".66rem", padding: "4px 6px", textAlign: "left", cursor: schedulingLocked ? "default" : "pointer" }}>
-                      <div style={{ fontWeight: 700 }}>{event.customer_name || event.builder_name || event.title}</div>
-                      <div style={{ opacity: .85 }}>{event.time} - Crew {findCrewById(crews, event.crew_id)?.number || "-"}</div>
-                    </button>
-                  ))}
-                  {day.events.length > 3 && <div style={{ fontSize: ".66rem", color: B.gray }}>+{day.events.length - 3} more</div>}
+                <div>
+                  <label htmlFor="residential-schedule-day_capacity_used" style={labelStyle}>Day capacity used</label>
+                  <input id="residential-schedule-day_capacity_used" style={INP} type="number" step="0.25" value={pendingResidentialDraft.day_capacity_used} onChange={e => handleResidentialDraftChange({ day_capacity_used: Number(e.target.value || 0.25) })} />
                 </div>
               </div>
-            ))}
-          </div>
-          </div>
-        )}
-
-        {!loading && !error && filtered.length > 0 && view === "week" && (
-          <div className="calendar-scroll-wrapper">
-          <div className="calendar-week-grid" style={{ display: "grid", gridTemplateColumns: "repeat(7,minmax(0,1fr))", gap: 10 }}>
-            {weekDays.map(day => (
-              <div className="calendar-day-card" key={day.iso} onClick={() => pickScheduleDate(day.iso)} style={{ border: `1px solid ${(pendingResidentialDraft?.scheduled_date === day.iso || pendingBuilderSchedule?.scheduled_date === day.iso) ? B.bronze : anchorDate === day.iso ? B.green : B.border}`, borderRadius: 8, padding: 10, minHeight: 260, cursor: readOnly ? "default" : "pointer" }}>
-                <div style={{ fontSize: ".76rem", fontWeight: 700, color: isWeekend(day.iso) ? "#922B21" : B.dark, marginBottom: 8 }}>{fmtDateShort(day.iso)}</div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                  {day.events.length === 0 && <div style={{ fontSize: ".72rem", color: B.gray }}>No scheduled work.</div>}
-                  {day.events.map(event => (
-                    <button className="calendar-event" key={event.id} onClick={e => { e.stopPropagation(); if (!schedulingLocked) onOpenJob(event.jobId); }} style={{ background: `${eventColor(event)}14`, color: B.dark, border: `1px solid ${eventColor(event)}30`, borderRadius: 6, padding: "8px 9px", textAlign: "left", cursor: schedulingLocked ? "default" : "pointer" }}>
-                      <div style={{ fontSize: ".72rem", fontWeight: 700 }}>{event.customer_name || event.builder_name || event.title}</div>
-                      <div style={{ fontSize: ".7rem", color: B.gray }}>{event.phase_label}</div>
-                      <div style={{ fontSize: ".68rem", color: B.gray }}>{event.time} · Crew {findCrewById(crews, event.crew_id)?.number || "-"}</div>
-                    </button>
-                  ))}
-                </div>
+              <div>
+                <label htmlFor="residential-schedule-work_order_number" style={labelStyle}>PO number</label>
+                <input id="residential-schedule-work_order_number" style={INP} value={pendingResidentialDraft.work_order_number} onChange={e => handleResidentialDraftChange({ work_order_number: e.target.value })} />
               </div>
-            ))}
-          </div>
-          </div>
+              <div>
+                <label htmlFor="residential-schedule-status" style={labelStyle}>Status</label>
+                <select id="residential-schedule-status" style={{ ...INP, cursor: "pointer" }} value={pendingResidentialDraft.status} onChange={e => handleResidentialDraftChange({ status: e.target.value })}>
+                  {JOB_STATUSES.map(status => <option key={status} value={status}>{status}</option>)}
+                </select>
+              </div>
+              {!!pendingResidentialDraft.scheduleEventDatabaseId && (
+                <RescheduleReasonInput
+                  value={pendingResidentialDraft.reschedule_reason || ""}
+                  onChange={nextReason => handleResidentialDraftChange({ reschedule_reason: nextReason })}
+                  helperText={residentialExistingReason ? `Required only when changing the scheduled date or time. Last saved reschedule reason: ${residentialExistingReason}` : "Required only when changing the scheduled date or time."}
+                  error={residentialValidation?.field === "reschedule_reason" ? residentialValidation.message : ""}
+                  inputIdPrefix="residential-schedule-reschedule-reason"
+                />
+              )}
+              <div>
+                <label htmlFor="residential-schedule-notes" style={labelStyle}>Notes</label>
+                <textarea id="residential-schedule-notes" style={{ ...INP, minHeight: 104 }} value={pendingResidentialDraft.notes} onChange={e => handleResidentialDraftChange({ notes: e.target.value })} />
+              </div>
+              <div className="calendar-side-panel-actions">
+                <Btn v="outline" onClick={onCancelPendingResidentialSchedule}>Cancel</Btn>
+                <Btn v="green" onClick={() => onSavePendingResidentialSchedule(pendingResidentialDraft)}>Save Scheduled Job</Btn>
+              </div>
+            </div>
+          </Card>
         )}
-
-        {!loading && !error && filtered.length > 0 && view === "day" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            {schedulingLocked && <button onClick={() => pickScheduleDate(anchorDate)} style={{ alignSelf: "flex-start", background: `${B.bronze}12`, border: `1px solid ${B.bronze}40`, color: B.bronze, borderRadius: 6, padding: "8px 12px", cursor: "pointer", fontFamily: "inherit", fontWeight: 700, fontSize: ".76rem" }}>Use {fmtDate(anchorDate)} for this job</button>}
-            {dayEvents.length === 0 && <div style={{ fontSize: ".82rem", color: B.gray }}>No work scheduled for {fmtDate(anchorDate)}.</div>}
-            {dayEvents.map(event => (
-              <Card key={event.id} className="calendar-event" style={{ padding: 14, background: `${eventColor(event)}10`, borderColor: `${eventColor(event)}35` }}>
-                <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-                  <div>
-                    <div style={{ fontSize: ".86rem", fontWeight: 700, color: B.dark }}>{event.customer_name || event.builder_name || event.title}</div>
-                    <div style={{ fontSize: ".76rem", color: B.gray }}>{event.schedule_type === "builder_slab" ? (event.community ? `${event.phase_label} · ${event.community}` : event.phase_label) : `${event.job_type} · ${event.address}`}</div>
-                  </div>
-                  <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                    <span style={{ fontSize: ".74rem", color: B.gray }}>{event.time} · Crew {findCrewById(crews, event.crew_id)?.number || "-"} · {fmtCap(event.capacity_used)}</span>
-                    <Pill status={event.status} />
-                    {!schedulingLocked && <Btn sm v="outline" onClick={() => onOpenJob(event.jobId)}>Open job</Btn>}
-                  </div>
-                </div>
-              </Card>
-            ))}
-          </div>
+        {!readOnly && pendingBuilderSchedule && (
+          <Card className="calendar-side-panel admin-section-card" style={{ alignSelf: "start", position: "sticky", top: 18 }}>
+            <div className="calendar-side-panel-header">
+              <div style={{ fontSize: ".82rem", fontWeight: 700, color: B.dark, textTransform: "uppercase", letterSpacing: .5 }}>Schedule Builder Job</div>
+              <div style={{ fontSize: ".92rem", fontWeight: 700, color: B.dark }}>{pendingBuilderSchedule.builder_name}</div>
+              <div style={{ fontSize: ".76rem", color: B.gray }}>{[pendingBuilderSchedule.community, pendingBuilderSchedule.lot_number ? `Lot ${pendingBuilderSchedule.lot_number}` : ""].filter(Boolean).join(" · ")}</div>
+            </div>
+            <FormValidationMessage message={builderSummaryError} style={{ marginBottom: 12 }} />
+            <div className="calendar-side-panel-form">
+              <div>
+                <label htmlFor="builder-schedule-scheduled_date" style={labelStyle}>Start date</label>
+                <input id="builder-schedule-scheduled_date" aria-invalid={builderValidation?.field === "scheduled_date" || undefined} style={getErrorInputStyle(builderValidation?.field === "scheduled_date")} type="date" value={pendingBuilderSchedule.scheduled_date} onChange={e => handleBuilderDraftChange({ scheduled_date: e.target.value })} />
+                {builderValidation?.field === "scheduled_date" && <div style={{ fontSize: ".72rem", color: VALIDATION_COLOR, marginTop: 6, fontWeight: 700 }}>{builderValidation.message}</div>}
+              </div>
+              <div>
+                <label htmlFor="builder-schedule-scheduled_time" style={labelStyle}>Start time</label>
+                <input id="builder-schedule-scheduled_time" style={INP} type="time" value={pendingBuilderSchedule.scheduled_time} onChange={e => handleBuilderDraftChange({ scheduled_time: e.target.value })} />
+              </div>
+              <div>
+                <label htmlFor="builder-schedule-crew_id" style={labelStyle}>Crew</label>
+                <select id="builder-schedule-crew_id" style={{ ...INP, cursor: "pointer" }} value={pendingBuilderSchedule.crew_id} onChange={e => handleBuilderDraftChange({ crew_id: e.target.value })}>
+                  {crews.map(crew => <option key={crew.id} value={crew.id}>{crew.name}</option>)}
+                </select>
+              </div>
+              <div className="calendar-side-panel-actions">
+                <Btn v="outline" onClick={onCancelPendingBuilderSchedule}>Cancel</Btn>
+                <Btn v="green" onClick={() => onSavePendingBuilderSchedule(pendingBuilderSchedule)}>Save Builder Schedule</Btn>
+              </div>
+            </div>
+          </Card>
         )}
-      </Card>
-      {!readOnly && pendingResidentialDraft && (
-        <Card className="calendar-side-panel admin-section-card" style={{ alignSelf: "start", position: "sticky", top: 18 }}>
-          <div style={{ fontSize: ".82rem", fontWeight: 700, color: B.dark, textTransform: "uppercase", letterSpacing: .5, marginBottom: 10 }}>Schedule Residential Job</div>
-          <div style={{ fontSize: ".88rem", fontWeight: 700, color: B.dark, marginBottom: 4 }}>{pendingResidentialDraft.customer_name}</div>
-          <div style={{ fontSize: ".76rem", color: B.gray, marginBottom: 12 }}>{pendingResidentialDraft.job_type}</div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            <div>
-              <label style={labelStyle}>Scheduled date</label>
-              <input style={INP} type="date" value={pendingResidentialDraft.scheduled_date} onChange={e => onPendingResidentialDraftChange({ ...pendingResidentialDraft, scheduled_date: e.target.value })} />
-              <div style={{ fontSize: ".7rem", color: B.gray, marginTop: 4 }}>Click a date in the calendar to schedule from the live view.</div>
-            </div>
-            <div>
-              <label style={labelStyle}>Start time</label>
-              <input style={INP} type="time" value={pendingResidentialDraft.scheduled_time} onChange={e => onPendingResidentialDraftChange({ ...pendingResidentialDraft, scheduled_time: e.target.value })} />
-            </div>
-            <div>
-              <label style={labelStyle}>Crew</label>
-              <select style={{ ...INP, cursor: "pointer" }} value={pendingResidentialDraft.crew_id} onChange={e => onPendingResidentialDraftChange({ ...pendingResidentialDraft, crew_id: e.target.value })}>
-                {crews.map(crew => <option key={crew.id} value={crew.id}>{crew.name}</option>)}
-              </select>
-            </div>
-            <div>
-              <label style={labelStyle}>Estimated duration (days)</label>
-              <input style={INP} type="number" step="0.25" value={pendingResidentialDraft.estimated_duration} onChange={e => onPendingResidentialDraftChange({ ...pendingResidentialDraft, estimated_duration: Number(e.target.value || 0.25) })} />
-            </div>
-            <div>
-              <label style={labelStyle}>Day capacity used</label>
-              <input style={INP} type="number" step="0.25" value={pendingResidentialDraft.day_capacity_used} onChange={e => onPendingResidentialDraftChange({ ...pendingResidentialDraft, day_capacity_used: Number(e.target.value || 0.25) })} />
-            </div>
-            <div>
-              <label style={labelStyle}>Work order number</label>
-              <input style={INP} value={pendingResidentialDraft.work_order_number} onChange={e => onPendingResidentialDraftChange({ ...pendingResidentialDraft, work_order_number: e.target.value })} />
-            </div>
-            <div>
-              <label style={labelStyle}>Status</label>
-              <select style={{ ...INP, cursor: "pointer" }} value={pendingResidentialDraft.status} onChange={e => onPendingResidentialDraftChange({ ...pendingResidentialDraft, status: e.target.value })}>
-                {JOB_STATUSES.map(status => <option key={status} value={status}>{status}</option>)}
-              </select>
-            </div>
-            <div>
-              <label style={labelStyle}>Notes</label>
-              <textarea style={{ ...INP, minHeight: 90 }} value={pendingResidentialDraft.notes} onChange={e => onPendingResidentialDraftChange({ ...pendingResidentialDraft, notes: e.target.value })} />
-            </div>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <Btn v="outline" onClick={onCancelPendingResidentialSchedule}>Cancel</Btn>
-              <Btn v="green" onClick={() => onSavePendingResidentialSchedule(pendingResidentialDraft)}>Save Scheduled Job</Btn>
-            </div>
-          </div>
-        </Card>
-      )}
-      {!readOnly && pendingBuilderSchedule && (
-        <Card className="calendar-side-panel admin-section-card" style={{ alignSelf: "start", position: "sticky", top: 18 }}>
-          <div style={{ fontSize: ".82rem", fontWeight: 700, color: B.dark, textTransform: "uppercase", letterSpacing: .5, marginBottom: 10 }}>Schedule Builder Job</div>
-          <div style={{ fontSize: ".88rem", fontWeight: 700, color: B.dark, marginBottom: 4 }}>{pendingBuilderSchedule.builder_name}</div>
-          <div style={{ fontSize: ".76rem", color: B.gray, marginBottom: 12 }}>{pendingBuilderSchedule.community} · Lot {pendingBuilderSchedule.lot_number}</div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            <div>
-              <label style={labelStyle}>Start date</label>
-              <input style={INP} type="date" value={pendingBuilderSchedule.scheduled_date} onChange={e => onPendingBuilderScheduleChange({ ...pendingBuilderSchedule, scheduled_date: e.target.value })} />
-            </div>
-            <div>
-              <label style={labelStyle}>Start time</label>
-              <input style={INP} type="time" value={pendingBuilderSchedule.scheduled_time} onChange={e => onPendingBuilderScheduleChange({ ...pendingBuilderSchedule, scheduled_time: e.target.value })} />
-            </div>
-            <div>
-              <label style={labelStyle}>Crew</label>
-              <select style={{ ...INP, cursor: "pointer" }} value={pendingBuilderSchedule.crew_id} onChange={e => onPendingBuilderScheduleChange({ ...pendingBuilderSchedule, crew_id: e.target.value })}>
-                {crews.map(crew => <option key={crew.id} value={crew.id}>{crew.name}</option>)}
-              </select>
-            </div>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <Btn v="outline" onClick={onCancelPendingBuilderSchedule}>Cancel</Btn>
-              <Btn v="green" onClick={() => onSavePendingBuilderSchedule(pendingBuilderSchedule)}>Save Builder Schedule</Btn>
-            </div>
-          </div>
-        </Card>
-      )}
       </div>
     </>
   );
@@ -2483,7 +2638,7 @@ function SettingsSection({ settings, onUpdateSettings, historyCounts }) {
   );
 }
 
-function JobDetailView({ job, crews, onBack, onSaveJob, onOpenPhaseEdit, onOpenPhaseDetails, readOnly = false, latestRescheduleReasons = {}, profileDisplayNames = {} }) {
+function JobDetailView({ job, crews, onBack, onSaveJob, onOpenPhaseEdit, onOpenPhaseDetails, readOnly = false, latestRescheduleReasons = {}, profileDisplayNames = {}, backLabel = "Back to Jobs" }) {
   const crew = findCrewById(crews, job.crew_id);
   const builderHeading = [job.builder_name, job.community, job.lot_number ? `Lot ${job.lot_number}` : ""].filter(Boolean).join(" - ") || job.name || "Builder Job";
   const residentialLastRescheduleReason = job.scheduleEventDatabaseId
@@ -2492,102 +2647,126 @@ function JobDetailView({ job, crews, onBack, onSaveJob, onOpenPhaseEdit, onOpenP
   const residentialLastRescheduledBy = job.last_rescheduled_by
     ? (String(profileDisplayNames[job.last_rescheduled_by] || "").trim() || "Unknown user")
     : "";
+  const detailHeading = job.schedule_type === "residential" ? job.customer_name : builderHeading;
+  const scheduleSummary = job.scheduled_date ? `${fmtDate(job.scheduled_date)}${job.scheduled_time ? ` · ${job.scheduled_time}` : ""}` : "Not scheduled";
+  const workOrderLabel = job.work_order_number || job.po_number || "-";
+  const statusStyle = STATUS_STYLES[job.status] || { c: B.mid };
   return (
-    <div style={{ minHeight: "100vh", background: "#F4F6F3" }}>
-      <div style={{ background: B.dark, padding: "0 16px" }}>
-        <div style={{ maxWidth: 1100, margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "space-between", height: 56 }}>
-          <button onClick={onBack} style={{ background: "none", border: "none", color: "rgba(255,255,255,.7)", cursor: "pointer", display: "flex", alignItems: "center", gap: 6, fontFamily: "inherit", fontSize: ".82rem" }}>
-            <i className="ti ti-arrow-left" style={{ fontSize: 16 }} aria-hidden="true" />Back to jobs
-          </button>
-          <Pill status={job.status} />
+    <div className="job-detail-page">
+      <Card className="admin-section-card job-detail-hero">
+        <div className="job-detail-hero-row">
+          <div className="job-detail-hero-copy">
+            <button className="job-detail-back-button" onClick={onBack} type="button">
+              <i className="ti ti-arrow-left" style={{ fontSize: 16 }} aria-hidden="true" />
+              {backLabel}
+            </button>
+            <div className="job-detail-eyebrow">{job.schedule_type === "residential" ? "Residential Schedule" : "Builder Slab Workflow"}</div>
+            <h1 style={{ fontSize: "1.28rem", fontWeight: 700, color: B.dark, margin: 0 }}>{detailHeading}</h1>
+            <div className="job-detail-subtitle">{job.job_address || "Address not available"}</div>
+          </div>
+          <div className="job-detail-hero-meta">
+            <div className="job-detail-meta-chip">
+              <span className="job-detail-meta-label">{job.schedule_type === "residential" ? "PO number" : "Work order"}</span>
+              <div className="job-detail-meta-value">{workOrderLabel}</div>
+            </div>
+            <div className="job-detail-meta-chip">
+              <span className="job-detail-meta-label">Crew</span>
+              <div className="job-detail-meta-value">{crew ? `Crew ${getCrewNumber(crew)}` : "-"}</div>
+            </div>
+            <div className="job-detail-meta-chip">
+              <span className="job-detail-meta-label">Scheduled</span>
+              <div className="job-detail-meta-value">{scheduleSummary}</div>
+            </div>
+            <div className="job-detail-meta-chip">
+              <span className="job-detail-meta-label">Status</span>
+              <div className="job-detail-meta-value job-detail-meta-value--status" style={{ color: statusStyle.c }}>{job.status}</div>
+            </div>
+          </div>
         </div>
-      </div>
-      <div style={{ maxWidth: 1100, margin: "0 auto", padding: "20px 16px 60px" }}>
-        <Card style={{ marginBottom: 16 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
-            <div>
-              <h1 style={{ fontSize: "1.2rem", fontWeight: 700, color: B.dark, marginBottom: 4 }}>{job.schedule_type === "residential" ? job.customer_name : builderHeading}</h1>
-              <div style={{ fontSize: ".82rem", color: B.gray }}>{job.job_address}</div>
-            </div>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-              {job.schedule_type === "residential" && <span style={{ fontSize: ".78rem", color: B.gray }}>Work order {job.work_order_number || "-"}</span>}
-              {crew && <span style={{ fontSize: ".78rem", color: B.gray }}>Crew {getCrewNumber(crew)}</span>}
-            </div>
-          </div>
-        </Card>
+      </Card>
 
-        {job.schedule_type === "residential" ? (
-          <div style={{ display: "grid", gridTemplateColumns: "1.2fr .8fr", gap: 16 }}>
-            <Card>
-              <div style={{ fontSize: ".82rem", fontWeight: 700, color: B.dark, textTransform: "uppercase", letterSpacing: .5, marginBottom: 12 }}>Residential Schedule</div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                {[["Scheduled date", fmtDate(job.scheduled_date)], ["Start time", job.scheduled_time || "-"], ["Estimated duration", fmtCap(job.estimated_duration)], ["Day capacity used", fmtCap(job.day_capacity_used)], ["Status", job.status], ["Crew", crew ? `${crew.name}` : "-"]].map(([label, value]) => (
-                  <div key={label}>
-                    <div style={{ fontSize: ".7rem", color: B.gray, marginBottom: 2 }}>{label}</div>
-                    <div style={{ fontSize: ".84rem", color: B.dark, fontWeight: 700 }}>{value}</div>
-                  </div>
-                ))}
-              </div>
-              {residentialLastRescheduleReason && <div style={{ marginTop: 12, fontSize: ".74rem", color: B.gray }}>Last reschedule reason: {residentialLastRescheduleReason}</div>}
-              {residentialLastRescheduledBy && <div style={{ marginTop: 6, fontSize: ".74rem", color: B.gray }}>Last rescheduled by: {residentialLastRescheduledBy}</div>}
-              {job.last_rescheduled_at && <div style={{ marginTop: 6, fontSize: ".74rem", color: B.gray }}>Last rescheduled at: {formatDateTime(job.last_rescheduled_at)}</div>}
-              {job.notes && <div style={{ marginTop: 14, fontSize: ".8rem", color: B.mid, lineHeight: 1.6 }}>{job.notes}</div>}
-            </Card>
-            {!readOnly && (
-              <Card>
-                <div style={{ fontSize: ".82rem", fontWeight: 700, color: B.dark, textTransform: "uppercase", letterSpacing: .5, marginBottom: 12 }}>Actions</div>
-                <Btn full v="outline" onClick={() => onOpenPhaseEdit(job.id, null)}><i className="ti ti-calendar-time" style={{ marginRight: 6 }} aria-hidden="true" />{job.scheduleEventDatabaseId ? "Reschedule Job" : "Schedule Job"}</Btn>
-                <div style={{ height: 10 }} />
-                <Btn full v="green" onClick={() => onSaveJob({ ...job, status: "Completed" })}><i className="ti ti-check" style={{ marginRight: 6 }} aria-hidden="true" />Mark Completed</Btn>
-                <div style={{ height: 10 }} />
-                <Btn full v="outline" onClick={() => onSaveJob({ ...job, status: "Delayed" })}><i className="ti ti-clock-exclamation" style={{ marginRight: 6 }} aria-hidden="true" />Mark Delayed</Btn>
-              </Card>
-            )}
-          </div>
-        ) : (
-          <Card>
-            <div style={{ fontSize: ".82rem", fontWeight: 700, color: B.dark, textTransform: "uppercase", letterSpacing: .5, marginBottom: 12 }}>Builder Slab Workflow</div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {sortBuilderPhases(job.phases || []).map((phase, idx) => (
-                <div key={phase.id} style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) auto", gap: 12, alignItems: "center", padding: "12px 10px", border: `1px solid ${B.border}`, borderRadius: 8, background: phase.counts_toward_crew ? B.white : B.sand }}>
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 10 }}>
-                    <div>
-                      <div style={{ fontSize: ".84rem", fontWeight: 700, color: B.dark }}>{idx + 1}. {phase.phase_label}</div>
-                      <div style={{ fontSize: ".72rem", color: B.gray }}>{phase.responsible_party}</div>
-                    </div>
-                    <div>
-                      <div style={{ fontSize: ".7rem", color: B.gray, marginBottom: 2 }}>Scheduled</div>
-                      <div style={{ fontSize: ".8rem", color: B.dark }}>{phase.scheduled_date ? `${fmtDate(phase.scheduled_date)} - ${phase.scheduled_time || "-"}` : "Not scheduled"}</div>
-                    </div>
-                    <div>
-                      <div style={{ fontSize: ".7rem", color: B.gray, marginBottom: 2 }}>Crew / capacity</div>
-                      <div style={{ fontSize: ".8rem", color: B.dark }}>
-                        {phase.crew_id ? `Crew ${findCrewById(crews, phase.crew_id)?.number || "-"}` : "Dependency task"}
-                        {phase.crew_id && ` - ${fmtCap(phase.day_capacity_used)}`}
-                      </div>
-                    </div>
-                    <div>
-                      <div style={{ fontSize: ".7rem", color: B.gray, marginBottom: 2 }}>Work order</div>
-                      <div style={{ fontSize: ".8rem", color: B.dark }}>{phase.work_order_number || "-"}</div>
-                    </div>
-                    {(phase.last_reschedule_reason || latestRescheduleReasons[phase.scheduleEventDatabaseId]) && (
-                      <div>
-                        <div style={{ fontSize: ".7rem", color: B.gray, marginBottom: 2 }}>Last reschedule reason</div>
-                        <div style={{ fontSize: ".8rem", color: B.dark }}>{phase.last_reschedule_reason || latestRescheduleReasons[phase.scheduleEventDatabaseId]}</div>
-                      </div>
-                    )}
-                  </div>
-                  <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
-                    <Pill status={phase.status} />
-                    <Btn sm v="outline" onClick={() => onOpenPhaseDetails(job.id, phase.id)}>View Details</Btn>
-                    {!readOnly && <Btn sm v="outline" onClick={() => onOpenPhaseEdit(job.id, phase.id)}>{phase.scheduleEventDatabaseId ? "Edit Phase" : "Schedule Phase"}</Btn>}
-                  </div>
+      {job.schedule_type === "residential" ? (
+        <div className="job-detail-main-grid">
+          <Card className="admin-section-card job-detail-card">
+            <div className="job-detail-section-title">Residential Schedule</div>
+            <div className="job-detail-info-grid">
+              {[["Scheduled date", fmtDate(job.scheduled_date)], ["Start time", job.scheduled_time || "-"], ["Estimated duration", fmtCap(job.estimated_duration)], ["Day capacity used", fmtCap(job.day_capacity_used)], ["Status", job.status], ["Crew", crew ? `${crew.name}` : "-"]].map(([label, value]) => (
+                <div key={label} className="job-detail-info-item">
+                  <div className="job-detail-info-label">{label}</div>
+                  <div className="job-detail-info-value">{value}</div>
                 </div>
               ))}
             </div>
+            {(residentialLastRescheduleReason || residentialLastRescheduledBy || job.last_rescheduled_at) && (
+              <div className="job-detail-history">
+                {residentialLastRescheduleReason && <div><strong>Last reschedule reason:</strong> {residentialLastRescheduleReason}</div>}
+                {residentialLastRescheduledBy && <div><strong>Last rescheduled by:</strong> {residentialLastRescheduledBy}</div>}
+                {job.last_rescheduled_at && <div><strong>Last rescheduled at:</strong> {formatDateTime(job.last_rescheduled_at)}</div>}
+              </div>
+            )}
+            <div className="job-detail-notes-block">
+              <div className="job-detail-info-label">Notes</div>
+              <div className="job-detail-notes-copy">{job.notes || "-"}</div>
+            </div>
           </Card>
-        )}
-      </div>
+          {!readOnly && (
+            <Card className="admin-section-card job-detail-card job-detail-actions-card">
+              <div className="job-detail-section-title">Actions</div>
+              <div className="job-detail-action-stack">
+                <Btn full v="outline" onClick={() => onOpenPhaseEdit(job.id, null)}><i className="ti ti-calendar-time" style={{ marginRight: 6 }} aria-hidden="true" />{job.scheduleEventDatabaseId ? "Reschedule Job" : "Schedule Job"}</Btn>
+                <Btn full v="green" onClick={() => onSaveJob({ ...job, status: "Completed" })}><i className="ti ti-check" style={{ marginRight: 6 }} aria-hidden="true" />Mark Completed</Btn>
+                <Btn full v="outline" onClick={() => onSaveJob({ ...job, status: "Delayed" })}><i className="ti ti-clock-exclamation" style={{ marginRight: 6 }} aria-hidden="true" />Mark Delayed</Btn>
+              </div>
+            </Card>
+          )}
+        </div>
+      ) : (
+        <Card className="admin-section-card job-detail-card">
+          <div className="job-detail-section-title">Builder Slab Workflow</div>
+          <div className="builder-workflow-list">
+            {sortBuilderPhases(job.phases || []).map((phase, idx) => (
+              <div key={phase.id} className={`builder-workflow-row${phase.counts_toward_crew ? "" : " is-dependency"}`}>
+                <div className="builder-workflow-row-main">
+                  <div className="builder-workflow-row-head">
+                    <div>
+                      <div className="builder-workflow-phase-title">{idx + 1}. {phase.phase_label}</div>
+                      <div className="builder-workflow-phase-subtitle">{phase.responsible_party}</div>
+                    </div>
+                    <Pill status={phase.status} />
+                  </div>
+                  <div className="builder-workflow-row-grid">
+                    <div className="job-detail-info-item">
+                      <div className="job-detail-info-label">Scheduled</div>
+                      <div className="job-detail-info-value">{phase.scheduled_date ? `${fmtDate(phase.scheduled_date)} · ${phase.scheduled_time || "-"}` : "Not scheduled"}</div>
+                    </div>
+                    <div className="job-detail-info-item">
+                      <div className="job-detail-info-label">Crew / capacity</div>
+                      <div className="job-detail-info-value">
+                        {phase.crew_id ? `Crew ${findCrewById(crews, phase.crew_id)?.number || "-"}` : "Dependency task"}
+                        {phase.crew_id && ` · ${fmtCap(phase.day_capacity_used)}`}
+                      </div>
+                    </div>
+                    <div className="job-detail-info-item">
+                      <div className="job-detail-info-label">Work order</div>
+                      <div className="job-detail-info-value">{phase.work_order_number || "-"}</div>
+                    </div>
+                    {(phase.last_reschedule_reason || latestRescheduleReasons[phase.scheduleEventDatabaseId]) && (
+                      <div className="job-detail-info-item builder-workflow-row-note">
+                        <div className="job-detail-info-label">Last reschedule reason</div>
+                        <div className="job-detail-info-value">{phase.last_reschedule_reason || latestRescheduleReasons[phase.scheduleEventDatabaseId]}</div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <div className="builder-workflow-row-actions">
+                  <Btn sm v="outline" onClick={() => onOpenPhaseDetails(job.id, phase.id)}>View Details</Btn>
+                  {!readOnly && <Btn sm v="outline" onClick={() => onOpenPhaseEdit(job.id, phase.id)}>{phase.scheduleEventDatabaseId ? "Edit Phase" : "Schedule Phase"}</Btn>}
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
     </div>
   );
 }
@@ -2611,7 +2790,7 @@ function ResidentialScheduleModal({ draft, crews, onClose, onSave }) {
             {crews.map(crew => <option key={crew.id} value={crew.id}>{crew.name}</option>)}
           </select>
         </div>
-        <div><label style={labelStyle}>Work order number</label><input style={INP} value={local.work_order_number} onChange={e => setLocal(prev => ({ ...prev, work_order_number: e.target.value }))} /></div>
+        <div><label style={labelStyle}>PO number</label><input style={INP} value={local.work_order_number} onChange={e => setLocal(prev => ({ ...prev, work_order_number: e.target.value }))} /></div>
         <div><label style={labelStyle}>Status</label>
           <select style={{ ...INP, cursor: "pointer" }} value={local.status} onChange={e => setLocal(prev => ({ ...prev, status: e.target.value }))}>
             {JOB_STATUSES.map(status => <option key={status} value={status}>{status}</option>)}
@@ -2658,10 +2837,11 @@ function BuilderJobModal({ draft, crews, builders, onClose, onSave }) {
   );
 }
 
-function RescheduleReasonInput({ value, onChange, helperText = "", required = false }) {
+function RescheduleReasonInput({ value, onChange, helperText = "", required = false, error = "", inputIdPrefix = "reschedule-reason" }) {
   const initialState = parseRescheduleReasonDraft(value);
   const [preset, setPreset] = useState(initialState.preset);
   const [customReason, setCustomReason] = useState(initialState.custom);
+  const hasError = !!error;
 
   useEffect(() => {
     const nextState = parseRescheduleReasonDraft(value);
@@ -2671,9 +2851,12 @@ function RescheduleReasonInput({ value, onChange, helperText = "", required = fa
 
   return (
     <div style={{ gridColumn: "1 / -1" }}>
-      <label style={labelStyle}>Reason for rescheduling</label>
+      <label htmlFor={`${inputIdPrefix}-preset`} style={labelStyle}>Reason for rescheduling</label>
       <select
-        style={{ ...INP, cursor: "pointer" }}
+        id={`${inputIdPrefix}-preset`}
+        aria-invalid={hasError || undefined}
+        aria-describedby={hasError ? `${inputIdPrefix}-error` : undefined}
+        style={getErrorInputStyle(hasError, { cursor: "pointer" })}
         value={preset}
         onChange={e => {
           const nextPreset = e.target.value;
@@ -2686,7 +2869,10 @@ function RescheduleReasonInput({ value, onChange, helperText = "", required = fa
       </select>
       {preset === "Other" && (
         <textarea
-          style={{ ...INP, minHeight: 90, marginTop: 10 }}
+          id={`${inputIdPrefix}-custom`}
+          aria-invalid={hasError || undefined}
+          aria-describedby={hasError ? `${inputIdPrefix}-error` : undefined}
+          style={getErrorInputStyle(hasError, { minHeight: 90, marginTop: 10 })}
           maxLength={500}
           value={customReason}
           onChange={e => {
@@ -2697,34 +2883,82 @@ function RescheduleReasonInput({ value, onChange, helperText = "", required = fa
           placeholder="Enter the reschedule reason."
         />
       )}
+      {error && <div id={`${inputIdPrefix}-error`} style={{ fontSize: ".72rem", color: VALIDATION_COLOR, marginTop: 6, fontWeight: 700 }}>{error}</div>}
       {helperText && <div style={{ fontSize: ".72rem", color: B.gray, marginTop: 4 }}>{helperText}</div>}
     </div>
   );
 }
 
-function PhaseEditModal({ draft, crews, onClose, onSave, isResidential }) {
+function PhaseEditModal({ draft, crews, onClose, onSave, isResidential, validation = null, onValidationReset = () => {} }) {
   const [local, setLocal] = useState(draft);
   const existingReason = String(local.last_reschedule_reason || "").trim();
+
+  useEffect(() => {
+    if (!validation?.field) return;
+    const targetId = validation.field === "reschedule_reason"
+      ? "phase-edit-reschedule-reason-preset"
+      : `phase-edit-${validation.field}`;
+    requestAnimationFrame(() => document.getElementById(targetId)?.focus());
+  }, [validation?.field]);
+
+  const updateLocal = patch => {
+    onValidationReset();
+    setLocal(prev => ({ ...prev, ...patch }));
+  };
+
   return (
     <Modal title={isResidential ? "Reschedule Residential Job" : `Edit ${draft.phase_label}`} onClose={onClose}>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-        <div><label style={labelStyle}>Scheduled date</label><input style={INP} type="date" value={local.scheduled_date} onChange={e => setLocal(prev => ({ ...prev, scheduled_date: e.target.value }))} /></div>
-        <div><label style={labelStyle}>Scheduled time</label><input style={INP} type="time" value={local.scheduled_time} onChange={e => setLocal(prev => ({ ...prev, scheduled_time: e.target.value }))} /></div>
-        <div><label style={labelStyle}>Crew</label><select style={{ ...INP, cursor: "pointer" }} value={local.crew_id} onChange={e => setLocal(prev => ({ ...prev, crew_id: e.target.value }))}>{crews.map(crew => <option key={crew.id} value={crew.id}>{crew.name}</option>)}</select></div>
-        <div><label style={labelStyle}>Status</label><select style={{ ...INP, cursor: "pointer" }} value={local.status} onChange={e => setLocal(prev => ({ ...prev, status: e.target.value }))}>{JOB_STATUSES.map(status => <option key={status} value={status}>{status}</option>)}</select></div>
-        <div><label style={labelStyle}>Day capacity used</label><input style={INP} type="number" step="0.25" value={local.day_capacity_used} onChange={e => setLocal(prev => ({ ...prev, day_capacity_used: Number(e.target.value || 0) }))} /></div>
-        <div><label style={labelStyle}>Responsible party</label><input disabled style={{ ...INP, background: "#F5F5F3" }} value={local.responsible_party || "Southern Oak Concrete"} /></div>
+      <div className="schedule-modal-stack">
+        <div className="schedule-modal-intro">
+          <div style={{ fontSize: ".82rem", color: B.gray }}>
+            {isResidential ? "Update the residential schedule while keeping the existing reschedule and weekend rules intact." : "Update the phase schedule, crew assignment, and status. Push-forward behavior remains unchanged."}
+          </div>
+        </div>
+        <FormValidationMessage message={validation && !validation.field ? validation.message : ""} />
+      </div>
+      <div className="schedule-modal-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 14 }}>
+        <div>
+          <label htmlFor="phase-edit-scheduled_date" style={labelStyle}>Scheduled date</label>
+          <input id="phase-edit-scheduled_date" aria-invalid={validation?.field === "scheduled_date" || undefined} style={getErrorInputStyle(validation?.field === "scheduled_date")} type="date" value={local.scheduled_date} onChange={e => updateLocal({ scheduled_date: e.target.value })} />
+          {validation?.field === "scheduled_date" && <div style={{ fontSize: ".72rem", color: VALIDATION_COLOR, marginTop: 6, fontWeight: 700 }}>{validation.message}</div>}
+        </div>
+        <div>
+          <label htmlFor="phase-edit-scheduled_time" style={labelStyle}>Scheduled time</label>
+          <input id="phase-edit-scheduled_time" aria-invalid={validation?.field === "scheduled_time" || undefined} style={getErrorInputStyle(validation?.field === "scheduled_time")} type="time" value={local.scheduled_time} onChange={e => updateLocal({ scheduled_time: e.target.value })} />
+          {validation?.field === "scheduled_time" && <div style={{ fontSize: ".72rem", color: VALIDATION_COLOR, marginTop: 6, fontWeight: 700 }}>{validation.message}</div>}
+        </div>
+        <div>
+          <label htmlFor="phase-edit-crew_id" style={labelStyle}>Crew</label>
+          <select id="phase-edit-crew_id" style={{ ...INP, cursor: "pointer" }} value={local.crew_id} onChange={e => updateLocal({ crew_id: e.target.value })}>{crews.map(crew => <option key={crew.id} value={crew.id}>{crew.name}</option>)}</select>
+        </div>
+        <div>
+          <label htmlFor="phase-edit-status" style={labelStyle}>Status</label>
+          <select id="phase-edit-status" style={{ ...INP, cursor: "pointer" }} value={local.status} onChange={e => updateLocal({ status: e.target.value })}>{JOB_STATUSES.map(status => <option key={status} value={status}>{status}</option>)}</select>
+        </div>
+        <div>
+          <label htmlFor="phase-edit-day_capacity_used" style={labelStyle}>Day capacity used</label>
+          <input id="phase-edit-day_capacity_used" style={INP} type="number" step="0.25" value={local.day_capacity_used} onChange={e => updateLocal({ day_capacity_used: Number(e.target.value || 0) })} />
+        </div>
+        <div>
+          <label htmlFor="phase-edit-responsible_party" style={labelStyle}>Responsible party</label>
+          <input id="phase-edit-responsible_party" disabled style={{ ...INP, background: "#F5F5F3" }} value={local.responsible_party || "Southern Oak Concrete"} />
+        </div>
         {!!local.scheduleEventDatabaseId && (
           <RescheduleReasonInput
             value={local.reschedule_reason || ""}
-            onChange={nextReason => setLocal(prev => ({ ...prev, reschedule_reason: nextReason }))}
+            onChange={nextReason => updateLocal({ reschedule_reason: nextReason })}
             helperText="A fresh reason is required only when this update changes the scheduled date or time."
+            error={validation?.field === "reschedule_reason" ? validation.message : ""}
+            inputIdPrefix="phase-edit-reschedule-reason"
           />
         )}
-        <div style={{ gridColumn: "1 / -1" }}><label style={labelStyle}>Notes</label><textarea style={{ ...INP, minHeight: 90 }} value={local.notes || ""} onChange={e => setLocal(prev => ({ ...prev, notes: e.target.value }))} /></div>
+        <div style={{ gridColumn: "1 / -1" }}>
+          <label htmlFor="phase-edit-notes" style={labelStyle}>Notes</label>
+          <textarea id="phase-edit-notes" style={{ ...INP, minHeight: 96 }} value={local.notes || ""} onChange={e => updateLocal({ notes: e.target.value })} />
+        </div>
       </div>
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, marginTop: 16, flexWrap: "wrap", alignItems: "center" }}>
-        <div style={{ fontSize: ".76rem", color: B.gray }}>
+      <div className="schedule-modal-actions" style={{ display: "flex", justifyContent: "space-between", gap: 10, marginTop: 18, flexWrap: "wrap", alignItems: "center" }}>
+        <div style={{ fontSize: ".76rem", color: B.gray, lineHeight: 1.5 }}>
           {!isResidential ? "If this phase is pushed later, following phases will move forward automatically and skip weekends." : ""}
           {existingReason ? `${!isResidential ? " " : ""}Last saved reschedule reason: ${existingReason}` : ""}
         </div>
@@ -2737,14 +2971,20 @@ function PhaseEditModal({ draft, crews, onClose, onSave, isResidential }) {
   );
 }
 
-function BuilderWorkflowScheduleModal({ draft, crews, onClose, onSave }) {
+function BuilderWorkflowScheduleModal({ draft, crews, onClose, onSave, validation = null, onValidationReset = () => {} }) {
   const [local, setLocal] = useState(draft);
 
   useEffect(() => {
     setLocal(draft);
   }, [draft]);
 
+  useEffect(() => {
+    if (validation?.phaseIndex === undefined || !validation?.field) return;
+    requestAnimationFrame(() => document.getElementById(`builder-workflow-phase-${validation.phaseIndex}-${validation.field}`)?.focus());
+  }, [validation?.phaseIndex, validation?.field]);
+
   const updatePhase = (index, patch, options = {}) => {
+    onValidationReset();
     setLocal(prev => {
       const nextPhases = (prev.phases || []).map((phase, phaseIndex) =>
         phaseIndex === index
@@ -2768,13 +3008,14 @@ function BuilderWorkflowScheduleModal({ draft, crews, onClose, onSave }) {
       <div style={{ fontSize: ".82rem", color: B.gray, marginBottom: 14 }}>
         Form Slab uses the selected date. Prep Slab defaults one working day later, and Pour Slab defaults one working day after Prep Slab.
       </div>
+      <FormValidationMessage message={validation && (validation.phaseIndex === undefined || !validation.field) ? validation.message : ""} style={{ marginBottom: 14 }} />
       <div style={{ fontSize: ".92rem", fontWeight: 700, color: B.dark }}>{local.builder_name || "Builder Job"}</div>
       <div style={{ fontSize: ".78rem", color: B.gray, marginBottom: 16 }}>
         {[local.community, local.lot_number ? `Lot ${local.lot_number}` : "", local.job_address].filter(Boolean).join(" · ") || "Builder slab workflow"}
       </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <div className="builder-workflow-modal-list" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
         {(local.phases || []).map((phase, index) => (
-          <div key={phase.id} style={{ border: `1px solid ${B.border}`, borderRadius: 10, padding: 14, background: B.white }}>
+          <div key={phase.id} className={`builder-workflow-modal-phase${validation?.phaseIndex === index ? " has-error" : ""}`} style={{ border: `1px solid ${validation?.phaseIndex === index ? VALIDATION_BORDER : B.border}`, borderRadius: 10, padding: 14, background: B.white }}>
             <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center", marginBottom: 10 }}>
               <div>
                 <div style={{ fontSize: ".92rem", fontWeight: 700, color: B.dark }}>{index + 1}. {phase.phase_label}</div>
@@ -2786,17 +3027,21 @@ function BuilderWorkflowScheduleModal({ draft, crews, onClose, onSave }) {
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))", gap: 12 }}>
               <div>
-                <label style={labelStyle}>Scheduled date</label>
+                <label htmlFor={`builder-workflow-phase-${index}-scheduled_date`} style={labelStyle}>Scheduled date</label>
                 <input
-                  style={INP}
+                  id={`builder-workflow-phase-${index}-scheduled_date`}
+                  aria-invalid={validation?.phaseIndex === index && validation?.field === "scheduled_date" || undefined}
+                  style={getErrorInputStyle(validation?.phaseIndex === index && validation?.field === "scheduled_date")}
                   type="date"
                   value={phase.scheduled_date || ""}
                   onChange={e => updatePhase(index, { scheduled_date: e.target.value, manual_date_override: index > 0 }, { recalculate: true })}
                 />
+                {validation?.phaseIndex === index && validation?.field === "scheduled_date" && <div style={{ fontSize: ".72rem", color: VALIDATION_COLOR, marginTop: 6, fontWeight: 700 }}>{validation.message}</div>}
               </div>
               <div>
-                <label style={labelStyle}>Start time</label>
+                <label htmlFor={`builder-workflow-phase-${index}-scheduled_time`} style={labelStyle}>Start time</label>
                 <input
+                  id={`builder-workflow-phase-${index}-scheduled_time`}
                   style={INP}
                   type="time"
                   value={phase.scheduled_time || ""}
@@ -2804,8 +3049,9 @@ function BuilderWorkflowScheduleModal({ draft, crews, onClose, onSave }) {
                 />
               </div>
               <div>
-                <label style={labelStyle}>Crew</label>
+                <label htmlFor={`builder-workflow-phase-${index}-crew_id`} style={labelStyle}>Crew</label>
                 <select
+                  id={`builder-workflow-phase-${index}-crew_id`}
                   style={{ ...INP, cursor: "pointer" }}
                   value={phase.crew_id || ""}
                   onChange={e => updatePhase(index, { crew_id: e.target.value })}
@@ -2814,8 +3060,9 @@ function BuilderWorkflowScheduleModal({ draft, crews, onClose, onSave }) {
                 </select>
               </div>
               <div>
-                <label style={labelStyle}>Status</label>
+                <label htmlFor={`builder-workflow-phase-${index}-status`} style={labelStyle}>Status</label>
                 <select
+                  id={`builder-workflow-phase-${index}-status`}
                   style={{ ...INP, cursor: "pointer" }}
                   value={phase.status || "Scheduled"}
                   onChange={e => updatePhase(index, { status: e.target.value })}
@@ -2825,8 +3072,9 @@ function BuilderWorkflowScheduleModal({ draft, crews, onClose, onSave }) {
               </div>
             </div>
             <div style={{ marginTop: 12 }}>
-              <label style={labelStyle}>Notes</label>
+              <label htmlFor={`builder-workflow-phase-${index}-notes`} style={labelStyle}>Notes</label>
               <textarea
+                id={`builder-workflow-phase-${index}-notes`}
                 style={{ ...INP, minHeight: 84 }}
                 value={phase.notes || ""}
                 onChange={e => updatePhase(index, { notes: e.target.value })}
@@ -2869,19 +3117,22 @@ function BuilderPhaseDetailsModal({ detail, crews, profileDisplayNames = {}, onC
 
   return (
     <Modal title={detail.phase.phase_label} onClose={onClose} width={720}>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 12 }}>
+      <div className="phase-detail-modal-head" style={{ marginBottom: 14 }}>
+        <div style={{ fontSize: ".82rem", color: B.gray }}>{[detail.builder_name, detail.community, detail.lot_number ? `Lot ${detail.lot_number}` : ""].filter(Boolean).join(" · ") || "Builder workflow phase"}</div>
+      </div>
+      <div className="phase-detail-modal-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 12 }}>
         {values.map(([label, value]) => (
-          <div key={label}>
-            <div style={{ fontSize: ".72rem", color: B.gray, marginBottom: 2 }}>{label}</div>
-            <div style={{ fontSize: ".85rem", color: B.dark, fontWeight: 700 }}>{value}</div>
+          <div key={label} className="job-detail-info-item">
+            <div className="job-detail-info-label">{label}</div>
+            <div className="job-detail-info-value">{value}</div>
           </div>
         ))}
       </div>
-      <div style={{ marginTop: 14 }}>
-        <div style={{ fontSize: ".72rem", color: B.gray, marginBottom: 4 }}>Notes</div>
-        <div style={{ fontSize: ".84rem", color: B.mid, lineHeight: 1.6 }}>{detail.phase.notes || "-"}</div>
+      <div className="job-detail-notes-block" style={{ marginTop: 16 }}>
+        <div className="job-detail-info-label">Notes</div>
+        <div className="job-detail-notes-copy">{detail.phase.notes || "-"}</div>
       </div>
-      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 18, flexWrap: "wrap" }}>
+      <div className="schedule-modal-actions" style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 18, flexWrap: "wrap" }}>
         {!detail.phase.scheduleEventDatabaseId && <Btn v="green" onClick={onSchedule}>Schedule Phase</Btn>}
         {!!detail.phase.scheduleEventDatabaseId && <Btn v="outline" onClick={onEdit}>Edit Phase</Btn>}
         {!!detail.phase.scheduleEventDatabaseId && <Btn v="green" onClick={onReschedule}>Reschedule Phase</Btn>}
@@ -2890,22 +3141,33 @@ function BuilderPhaseDetailsModal({ detail, crews, profileDisplayNames = {}, onC
   );
 }
 
-function PushSummaryModal({ preview, onClose, onConfirm }) {
+function PushSummaryModal({ preview, onClose, onConfirm, validation = null, onValidationReset = () => {} }) {
   const [rescheduleReason, setRescheduleReason] = useState(preview.reschedule_reason || "");
   const requiresRescheduleReason = !!preview.requiresRescheduleReason;
   const conflictCount = preview.summary.filter(item => item.conflict).length;
+
+  useEffect(() => {
+    setRescheduleReason(preview.reschedule_reason || "");
+  }, [preview]);
+
+  useEffect(() => {
+    if (validation?.field !== "reschedule_reason") return;
+    requestAnimationFrame(() => document.getElementById("push-preview-reschedule-reason-preset")?.focus());
+  }, [validation?.field]);
+
   return (
     <Modal title="Confirm Builder Schedule Push" onClose={onClose} width={860}>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 10, marginBottom: 16 }}>
-        <Card style={{ padding: 14, background: B.white }}>
+      <FormValidationMessage message={validation && !validation.field ? validation.message : ""} style={{ marginBottom: 14 }} />
+      <div className="push-summary-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 10, marginBottom: 16 }}>
+        <Card className="push-summary-card" style={{ padding: 14, background: B.white }}>
           <div style={{ fontSize: ".72rem", color: B.gray, textTransform: "uppercase", letterSpacing: .5, marginBottom: 4 }}>Phases affected</div>
           <div style={{ fontSize: "1.2rem", fontWeight: 700, color: B.dark }}>{preview.summary.length}</div>
         </Card>
-        <Card style={{ padding: 14, background: conflictCount ? "#FFF6F4" : "#F5FBF6", borderColor: conflictCount ? "#F0C1B8" : "#CFE5D2" }}>
+        <Card className="push-summary-card" style={{ padding: 14, background: conflictCount ? "#FFF6F4" : "#F5FBF6", borderColor: conflictCount ? "#F0C1B8" : "#CFE5D2" }}>
           <div style={{ fontSize: ".72rem", color: B.gray, textTransform: "uppercase", letterSpacing: .5, marginBottom: 4 }}>Conflicts</div>
           <div style={{ fontSize: "1.2rem", fontWeight: 700, color: conflictCount ? "#922B21" : B.green }}>{conflictCount}</div>
         </Card>
-        <Card style={{ padding: 14, background: B.white }}>
+        <Card className="push-summary-card" style={{ padding: 14, background: B.white }}>
           <div style={{ fontSize: ".72rem", color: B.gray, textTransform: "uppercase", letterSpacing: .5, marginBottom: 4 }}>Weekend rule</div>
           <div style={{ fontSize: ".88rem", fontWeight: 700, color: B.dark }}>Saturdays and Sundays are skipped</div>
         </Card>
@@ -2943,12 +3205,17 @@ function PushSummaryModal({ preview, onClose, onConfirm }) {
           <div style={{ fontSize: ".76rem", color: B.gray, marginBottom: 10 }}>One or more existing scheduled phases are moving, so this push-forward update needs a standardized reason.</div>
           <RescheduleReasonInput
             value={rescheduleReason}
-            onChange={setRescheduleReason}
+            onChange={nextReason => {
+              onValidationReset();
+              setRescheduleReason(nextReason);
+            }}
             required
+            error={validation?.field === "reschedule_reason" ? validation.message : ""}
+            inputIdPrefix="push-preview-reschedule-reason"
           />
         </Card>
       )}
-      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 }}>
+      <div className="schedule-modal-actions" style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 }}>
         <Btn v="outline" onClick={onClose}>Cancel</Btn>
         <Btn v="green" onClick={() => onConfirm(rescheduleReason)}>Apply Schedule Push</Btn>
       </div>
@@ -3025,22 +3292,22 @@ function WeekendOverrideModal({ state, crews, onClose, onConfirm, onCancel }) {
   const [chargeWeekendFee, setChargeWeekendFee] = useState(false);
   return (
     <Modal title="Weekend Schedule Override" onClose={onClose} width={640}>
-      <div style={{ fontSize: ".8rem", color: B.gray, marginBottom: 14 }}>
+      <div style={{ fontSize: ".8rem", color: B.gray, marginBottom: 14, lineHeight: 1.6 }}>
         {state.message || "This schedule lands on a weekend. Pick the assigned crew and choose whether to apply a weekend fee before saving."}
       </div>
-      <div style={{ display: "grid", gap: 12 }}>
+      <div className="weekend-override-grid" style={{ display: "grid", gap: 12 }}>
         <div>
           <label style={labelStyle}>Assigned crew</label>
           <select style={{ ...INP, cursor: "pointer" }} value={crewId} onChange={e => setCrewId(e.target.value)}>
             {crews.map(crew => <option key={crew.id} value={crew.id}>{crew.name}</option>)}
           </select>
         </div>
-        <label style={{ display: "flex", alignItems: "center", gap: 10, fontSize: ".82rem", color: B.mid }}>
+        <label className="weekend-override-checkbox" style={{ display: "flex", alignItems: "center", gap: 10, fontSize: ".82rem", color: B.mid }}>
           <input type="checkbox" checked={chargeWeekendFee} onChange={e => setChargeWeekendFee(e.target.checked)} />
           <span>Charge weekend fee</span>
         </label>
       </div>
-      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 18 }}>
+      <div className="schedule-modal-actions" style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 18 }}>
         <Btn v="outline" onClick={onCancel}>Cancel</Btn>
         <Btn v="green" onClick={() => onConfirm({ crew_id: crewId, charge_weekend_fee: chargeWeekendFee })}>Apply Override</Btn>
       </div>
@@ -3151,6 +3418,11 @@ export default function AdminWorkspace({
   const [conflictState, setConflictState] = useState(null);
   const [weekendOverrideState, setWeekendOverrideState] = useState(null);
   const [warningState, setWarningState] = useState(null);
+  const [residentialValidation, setResidentialValidation] = useState(null);
+  const [builderScheduleValidation, setBuilderScheduleValidation] = useState(null);
+  const [builderWorkflowValidation, setBuilderWorkflowValidation] = useState(null);
+  const [phaseDraftValidation, setPhaseDraftValidation] = useState(null);
+  const [pushPreviewValidation, setPushPreviewValidation] = useState(null);
   const [financeView, setFinanceView] = useState("overview");
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
@@ -3223,6 +3495,8 @@ export default function AdminWorkspace({
   };
   const navigateToAdminSection = nextSection => {
     closeQuickView(false);
+    setSelectedJobId(null);
+    setSelectedCalendarJobId(null);
     setSelectedCustomerId(null);
     setCustomerModalCustomerId(null);
     setCustomerEditOpen(false);
@@ -3231,6 +3505,20 @@ export default function AdminWorkspace({
     setCustomerDeactivateOpen(false);
     setCustomerLifecycleSaving(false);
     setCustomerLifecycleError("");
+    setResidentialDraft(null);
+    setBuilderScheduleDraft(null);
+    setBuilderWorkflowDraft(null);
+    setPhaseDraft(null);
+    setPhaseDetailState(null);
+    setPushPreview(null);
+    setConflictState(null);
+    setWeekendOverrideState(null);
+    setWarningState(null);
+    setResidentialValidation(null);
+    setBuilderScheduleValidation(null);
+    setBuilderWorkflowValidation(null);
+    setPhaseDraftValidation(null);
+    setPushPreviewValidation(null);
     setSection(nextSection);
     if (nextSection !== "finance") {
       setFinanceView("overview");
@@ -3439,7 +3727,7 @@ export default function AdminWorkspace({
   const openBuilderJobModal = () => {
     if (!canManageSchedule) return;
     if (!builders.length) {
-      window.alert("Add a builder first before creating a builder job.");
+      showScheduleWarning("Builder Job Unavailable", "Add a builder first before creating a builder job.");
       return;
     }
     setBuilderDraft({ builder_id: builders[0]?.id || "", community: "", lot_number: "", job_address: "", work_order_number: "", crew_id: crews[0]?.id || "", notes: "" });
@@ -3483,9 +3771,7 @@ export default function AdminWorkspace({
   };
 
   const showScheduleWriteError = (actionLabel, error) => {
-    const message = error instanceof Error ? error.message : `Unable to ${actionLabel}.`;
-    console.error(`Unable to ${actionLabel}:`, error);
-    window.alert(message);
+    showScheduleWarning("Scheduling Update Failed", buildScheduleErrorMessage(actionLabel, error));
   };
 
   const findCalendarJob = jobId => calendarJobs.find(job => job.id === jobId) || null;
@@ -3561,6 +3847,8 @@ export default function AdminWorkspace({
   const openResidentialSchedule = ticket => {
     if (!canManageSchedule) return;
     setBuilderScheduleDraft(null);
+    setBuilderScheduleValidation(null);
+    setResidentialValidation(null);
     setResidentialDraft({
       return_section: "tickets",
       customer_name: ticket.name,
@@ -3586,6 +3874,8 @@ export default function AdminWorkspace({
   const openResidentialRescheduleFromCalendarJob = job => {
     if (!canManageSchedule) return;
     setBuilderScheduleDraft(null);
+    setBuilderScheduleValidation(null);
+    setResidentialValidation(null);
     setResidentialDraft({
       job_id: job.id,
       job_database_id: job.job_database_id || job.databaseId || "",
@@ -3615,6 +3905,8 @@ export default function AdminWorkspace({
   const openResidentialRescheduleFromJob = job => {
     if (!canManageSchedule) return;
     setBuilderScheduleDraft(null);
+    setBuilderScheduleValidation(null);
+    setResidentialValidation(null);
     const jobDatabaseId = job.databaseId || "";
     const resolvedScheduleRow = resolveResidentialScheduleRow(jobDatabaseId, job.scheduleEventDatabaseId || "");
     const resolvedScheduleEventId = getResidentialScheduleEventId(jobDatabaseId, job.scheduleEventDatabaseId || "");
@@ -3656,6 +3948,14 @@ export default function AdminWorkspace({
     (originalDate || "") !== (nextDate || "")
     || normalizeScheduleTimeValue(originalStartTime) !== normalizeScheduleTimeValue(nextStartTime)
     || normalizeScheduleTimeValue(originalEndTime) !== normalizeScheduleTimeValue(nextEndTime);
+  const buildScheduleErrorMessage = (actionLabel, error) => {
+    const message = error instanceof Error ? error.message : `Unable to ${actionLabel}.`;
+    console.error(`Unable to ${actionLabel}:`, error);
+    return message;
+  };
+  const showScheduleWarning = (title, message) => {
+    setWarningState({ title, message });
+  };
   const rememberLatestRescheduleReason = (scheduleEventDatabaseId, reason) => {
     const normalizedReason = String(reason || "").trim();
     if (!scheduleEventDatabaseId || !normalizedReason) {
@@ -3669,17 +3969,23 @@ export default function AdminWorkspace({
   };
   const validateRescheduleReasonLength = reason => {
     if (String(reason || "").trim().length > 500) {
-      window.alert("Reschedule reasons must be 500 characters or fewer.");
-      return false;
+      return "Reschedule reasons must be 500 characters or fewer.";
     }
-
-    return true;
+    return "";
   };
 
   const saveResidentialSchedule = async (draft, conflictOverrideReason = "") => {
     if (!canManageSchedule) return;
-    if (!draft.scheduled_date) return;
-    if (!validateRescheduleReasonLength(draft.reschedule_reason)) return;
+    if (!draft.scheduled_date) {
+      setResidentialValidation({ field: "scheduled_date", message: "Choose a scheduled date before saving this job." });
+      return;
+    }
+    const reasonLengthError = validateRescheduleReasonLength(draft.reschedule_reason);
+    if (reasonLengthError) {
+      setResidentialValidation({ field: "reschedule_reason", message: reasonLengthError });
+      return;
+    }
+    setResidentialValidation(null);
     let resolvedJobId = draft.job_database_id || "";
     let resolvedScheduleEventDatabaseId = getResidentialScheduleEventId(resolvedJobId, draft.scheduleEventDatabaseId || "");
     if (isSunday(draft.scheduled_date)) {
@@ -3688,7 +3994,7 @@ export default function AdminWorkspace({
     }
     if (isSaturday(draft.scheduled_date) && settings.skipWeekendsByDefault && !draft.weekend_override) {
       if (!settings.allowWeekendOverride) {
-        window.alert("Saturday scheduling requires an override, and weekend overrides are currently disabled.");
+        setResidentialValidation({ field: null, message: "Saturday scheduling requires an override, and weekend overrides are currently disabled." });
         return;
       }
       setWeekendOverrideState({
@@ -3750,7 +4056,7 @@ export default function AdminWorkspace({
       );
       const rescheduleReason = String(draft.reschedule_reason || "").trim();
       if (requiresRescheduleReason && !rescheduleReason) {
-        window.alert("A reschedule reason is required when changing the scheduled date or time.");
+        setResidentialValidation({ field: "reschedule_reason", message: "A reschedule reason is required when changing the scheduled date or time." });
         return;
       }
 
@@ -3773,17 +4079,18 @@ export default function AdminWorkspace({
         if (draft.from_phase_edit) {
           setPhaseDraft(null);
         }
+        setResidentialValidation(null);
         setSelectedCalendarJobId(null);
         setSection(draft.return_section || "calendar");
         return;
       } catch (error) {
-        showScheduleWriteError("update the calendar event", error);
+        setResidentialValidation({ field: null, message: buildScheduleErrorMessage("update the calendar event", error) });
         return;
       }
     }
 
     if (!draft.estimateDatabaseId) {
-      window.alert("This estimate is not linked to a database job yet, so the calendar event cannot be saved.");
+      setResidentialValidation({ field: null, message: "This estimate is not linked to a database job yet, so the calendar event cannot be saved." });
       return;
     }
 
@@ -3793,13 +4100,13 @@ export default function AdminWorkspace({
       try {
         jobId = await findJobIdByEstimateId(draft.estimateDatabaseId);
       } catch (error) {
-        showScheduleWriteError("locate the accepted job", error);
+        setResidentialValidation({ field: null, message: buildScheduleErrorMessage("locate the accepted job", error) });
         return;
       }
     }
 
     if (!jobId) {
-      window.alert("No database job was found for this accepted estimate. Confirm the accepted-estimate job trigger has run before scheduling.");
+      setResidentialValidation({ field: null, message: "No database job was found for this accepted estimate. Confirm the accepted-estimate job trigger has run before scheduling." });
       return;
     }
 
@@ -3816,7 +4123,7 @@ export default function AdminWorkspace({
       );
       const rescheduleReason = String(draft.reschedule_reason || "").trim();
       if (requiresRescheduleReason && !rescheduleReason) {
-        window.alert("A reschedule reason is required when changing the scheduled date or time.");
+        setResidentialValidation({ field: "reschedule_reason", message: "A reschedule reason is required when changing the scheduled date or time." });
         return;
       }
 
@@ -3839,11 +4146,12 @@ export default function AdminWorkspace({
         if (draft.from_phase_edit) {
           setPhaseDraft(null);
         }
+        setResidentialValidation(null);
         setSelectedCalendarJobId(null);
         setSection(draft.return_section || "calendar");
         return;
       } catch (error) {
-        showScheduleWriteError("update the calendar event", error);
+        setResidentialValidation({ field: null, message: buildScheduleErrorMessage("update the calendar event", error) });
         return;
       }
     }
@@ -3871,16 +4179,17 @@ export default function AdminWorkspace({
       if (draft.from_phase_edit) {
         setPhaseDraft(null);
       }
+      setResidentialValidation(null);
       setSelectedJobId(null);
       setSection(draft.return_section || "tickets");
     } catch (error) {
       if (isResidentialScheduleUniqueViolation(error)) {
-        window.alert("This residential job already has a scheduled event. Reopen it and use Reschedule instead.");
+        setResidentialValidation({ field: null, message: "This residential job already has a scheduled event. Reopen it and use Reschedule instead." });
         void refreshScheduleEvents();
         void refreshJobs();
         return;
       }
-      showScheduleWriteError("create the calendar event", error);
+      setResidentialValidation({ field: null, message: buildScheduleErrorMessage("create the calendar event", error) });
     }
   };
 
@@ -3888,7 +4197,7 @@ export default function AdminWorkspace({
     const builder = builders.find(item => item.id === draft.builder_id);
 
     if (!builder?.databaseId) {
-      window.alert("The selected builder is missing its database ID, so this builder job cannot be created.");
+      showScheduleWarning("Builder Job Unavailable", "The selected builder is missing its database ID, so this builder job cannot be created.");
       return;
     }
 
@@ -3913,20 +4222,23 @@ export default function AdminWorkspace({
       setSection("jobs");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unable to create builder job.";
-      window.alert(message);
+      showScheduleWarning("Builder Job Unavailable", message);
     }
   };
 
   const saveBuilderSchedule = draft => {
     if (!canManageSchedule) return;
-    if (!draft.scheduled_date) return;
-    const databaseBackedBuilderJob = findCalendarJob(draft.job_id);
-    if (!databaseBackedBuilderJob) {
-      window.alert("This builder workflow does not have a matching database job record yet, so it cannot be written to Supabase schedule_events in this phase.");
+    if (!draft.scheduled_date) {
+      setBuilderScheduleValidation({ field: "scheduled_date", message: "Choose a start date before saving this builder schedule." });
       return;
     }
-    window.alert("Builder scheduling from the Jobs flow is not enabled in this phase unless the workflow is already backed by schedule_events.");
-    setBuilderScheduleDraft(null);
+    setBuilderScheduleValidation(null);
+    const databaseBackedBuilderJob = findCalendarJob(draft.job_id);
+    if (!databaseBackedBuilderJob) {
+      setBuilderScheduleValidation({ field: null, message: "This builder workflow does not have a matching database job record yet, so it cannot be written to Supabase schedule_events in this phase." });
+      return;
+    }
+    setBuilderScheduleValidation({ field: null, message: "Builder scheduling from the Jobs flow is not enabled in this phase unless the workflow is already backed by schedule_events." });
   };
 
   const openPhaseEdit = (jobId, phaseId) => {
@@ -3940,6 +4252,7 @@ export default function AdminWorkspace({
 
       const phase = sortBuilderPhases(calendarJob.phases || []).find(item => item.id === phaseId);
       if (!phase) return;
+      setPhaseDraftValidation(null);
       setPhaseDraft({
         ...phase,
         scheduleEventDatabaseId: getScheduleEventDatabaseId(phase),
@@ -3959,6 +4272,7 @@ export default function AdminWorkspace({
     }
     const phase = sortBuilderPhases(job.phases || []).find(item => item.id === phaseId);
     if (!phase) return;
+    setPhaseDraftValidation(null);
     setPhaseDraft({
       ...phase,
       scheduleEventDatabaseId: getScheduleEventDatabaseId(phase),
@@ -4002,18 +4316,19 @@ export default function AdminWorkspace({
 
   const saveInitialBuilderWorkflow = async (draft, overrideReason = "") => {
     if (!canManageSchedule) return;
+    setBuilderWorkflowValidation(null);
 
     for (let idx = 0; idx < (draft.phases || []).length; idx += 1) {
       const phase = draft.phases[idx];
       const previousPhase = idx > 0 ? draft.phases[idx - 1] : null;
 
       if (!phase.scheduled_date) {
-        window.alert(`${phase.phase_label} requires a scheduled date before saving.`);
+        setBuilderWorkflowValidation({ phaseIndex: idx, field: "scheduled_date", message: `${phase.phase_label} requires a scheduled date before saving.` });
         return;
       }
 
       if (previousPhase?.scheduled_date && phase.scheduled_date < previousPhase.scheduled_date) {
-        window.alert(`${phase.phase_label} cannot be scheduled before ${previousPhase.phase_label}.`);
+        setBuilderWorkflowValidation({ phaseIndex: idx, field: "scheduled_date", message: `${phase.phase_label} cannot be scheduled before ${previousPhase.phase_label}.` });
         return;
       }
 
@@ -4026,7 +4341,7 @@ export default function AdminWorkspace({
     const saturdayPhase = (draft.phases || []).find(phase => phase.scheduled_date && isSaturday(phase.scheduled_date));
     if (saturdayPhase && settings.skipWeekendsByDefault && !draft.weekend_override) {
       if (!settings.allowWeekendOverride) {
-        window.alert("Saturday scheduling requires an override, and weekend overrides are currently disabled.");
+        setBuilderWorkflowValidation({ field: null, message: "Saturday scheduling requires an override, and weekend overrides are currently disabled." });
         return;
       }
 
@@ -4048,7 +4363,7 @@ export default function AdminWorkspace({
 
     const sourceJob = getBuilderJobSource(draft.job_id, draft.job_database_id);
     if (!sourceJob || sourceJob.schedule_type !== "builder_slab") {
-      window.alert("This builder workflow does not have a matching database job record, so phase scheduling cannot be written to Supabase.");
+      setBuilderWorkflowValidation({ field: null, message: "This builder workflow does not have a matching database job record, so phase scheduling cannot be written to Supabase." });
       return;
     }
 
@@ -4124,6 +4439,7 @@ export default function AdminWorkspace({
       if (overrideReason) {
         setOverrideHistory(prev => [{ id: `ovr-${Date.now()}`, jobId: jobDatabaseId, note: overrideReason, createdAt: new Date().toISOString() }, ...prev]);
       }
+      setBuilderWorkflowValidation(null);
       setBuilderWorkflowDraft(null);
       void refreshScheduleEvents();
       void refreshJobs();
@@ -4136,17 +4452,21 @@ export default function AdminWorkspace({
         void refreshScheduleEvents();
         void refreshJobs();
       }
-      showScheduleWriteError(savedCount > 0 ? "finish saving the builder workflow" : "save the builder workflow", error);
+      setBuilderWorkflowValidation({ field: null, message: buildScheduleErrorMessage(savedCount > 0 ? "finish saving the builder workflow" : "save the builder workflow", error) });
     }
   };
 
   const saveBuilderPhase = async (draft, overrideReason = "") => {
     if (!canManageSchedule) return;
-    if (!validateRescheduleReasonLength(draft.reschedule_reason)) return;
+    const reasonLengthError = validateRescheduleReasonLength(draft.reschedule_reason);
+    if (reasonLengthError) {
+      setPhaseDraftValidation({ field: "reschedule_reason", message: reasonLengthError });
+      return;
+    }
+    setPhaseDraftValidation(null);
     const sourceJob = getBuilderJobSource(draft.job_id, draft.job_database_id);
     if (!sourceJob || sourceJob.schedule_type !== "builder_slab") {
-      setPhaseDraft(null);
-      window.alert("This builder workflow does not have a matching database job record, so phase scheduling cannot be written to Supabase.");
+      setPhaseDraftValidation({ field: null, message: "This builder workflow does not have a matching database job record, so phase scheduling cannot be written to Supabase." });
       return;
     }
 
@@ -4170,18 +4490,19 @@ export default function AdminWorkspace({
 
     if (!normalizedDraft.scheduleEventDatabaseId && persistedStandardPhaseCount === 0) {
       if (normalizedDraft.phase_key !== "form_slab") {
-        window.alert("Schedule Form Slab first so the initial builder workflow can create all three standard phases together.");
+        setPhaseDraftValidation({ field: null, message: "Schedule Form Slab first so the initial builder workflow can create all three standard phases together." });
         return;
       }
 
       setPhaseDraft(null);
+      setBuilderWorkflowValidation(null);
       setBuilderWorkflowDraft(createInitialBuilderWorkflowDraft(sourceJob, normalizedDraft, jobDatabaseId));
       return;
     }
 
     const previousPhase = sortedPhases[phaseIndex - 1];
     if (previousPhase?.scheduled_date && normalizedDraft.scheduled_date && normalizedDraft.scheduled_date < previousPhase.scheduled_date) {
-      window.alert(`${normalizedDraft.phase_label} cannot be scheduled before ${previousPhase.phase_label}.`);
+      setPhaseDraftValidation({ field: "scheduled_date", message: `${normalizedDraft.phase_label} cannot be scheduled before ${previousPhase.phase_label}.` });
       return;
     }
     if (normalizedDraft.scheduled_date && isSunday(normalizedDraft.scheduled_date)) {
@@ -4190,7 +4511,7 @@ export default function AdminWorkspace({
     }
     if (normalizedDraft.scheduled_date && isSaturday(normalizedDraft.scheduled_date) && settings.skipWeekendsByDefault && !normalizedDraft.weekend_override) {
       if (!settings.allowWeekendOverride) {
-        window.alert("Saturday scheduling requires an override, and weekend overrides are currently disabled.");
+        setPhaseDraftValidation({ field: null, message: "Saturday scheduling requires an override, and weekend overrides are currently disabled." });
         return;
       }
       setWeekendOverrideState({
@@ -4297,7 +4618,7 @@ export default function AdminWorkspace({
     );
     const rescheduleReason = String(normalizedDraft.reschedule_reason || "").trim();
     if (requiresRescheduleReason && !rescheduleReason) {
-      window.alert("A reschedule reason is required when changing the scheduled date or time.");
+      setPhaseDraftValidation({ field: "reschedule_reason", message: "A reschedule reason is required when changing the scheduled date or time." });
       return;
     }
 
@@ -4323,17 +4644,23 @@ export default function AdminWorkspace({
       if (overrideReason) {
         setOverrideHistory(prev => [{ id: `ovr-${Date.now()}`, jobId: jobDatabaseId, note: overrideReason, createdAt: new Date().toISOString() }, ...prev]);
       }
+      setPhaseDraftValidation(null);
       void refreshJobs();
       setPhaseDraft(null);
     } catch (error) {
-      showScheduleWriteError(normalizedDraft.scheduleEventDatabaseId ? "update the builder schedule" : "create the builder schedule", error);
+      setPhaseDraftValidation({ field: null, message: buildScheduleErrorMessage(normalizedDraft.scheduleEventDatabaseId ? "update the builder schedule" : "create the builder schedule", error) });
     }
   };
 
   const applyPushPreview = async (overrideReason = "", rescheduleReason = "") => {
     if (!canManageSchedule) return;
     if (!pushPreview) return;
-    if (!validateRescheduleReasonLength(rescheduleReason)) return;
+    const reasonLengthError = validateRescheduleReasonLength(rescheduleReason);
+    if (reasonLengthError) {
+      setPushPreviewValidation({ field: "reschedule_reason", message: reasonLengthError });
+      return;
+    }
+    setPushPreviewValidation(null);
     if (pushPreview.databaseBacked) {
       if (pushPreview.conflicts.length && !overrideReason) {
         setConflictState({
@@ -4378,7 +4705,7 @@ export default function AdminWorkspace({
       });
 
       if (changedPersistedPhases.length > 0 && !String(rescheduleReason || "").trim()) {
-        window.alert("A push-forward reason is required because one or more existing scheduled phases are being rescheduled.");
+        setPushPreviewValidation({ field: "reschedule_reason", message: "A push-forward reason is required because one or more existing scheduled phases are being rescheduled." });
         return;
       }
 
@@ -4426,15 +4753,15 @@ export default function AdminWorkspace({
         if (overrideReason) {
           setOverrideHistory(prev => [{ id: `ovr-${Date.now()}`, jobId: jobDatabaseId, note: overrideReason, createdAt: new Date().toISOString() }, ...prev]);
         }
+        setPushPreviewValidation(null);
         void refreshJobs();
         setPushPreview(null);
       } catch (error) {
-        showScheduleWriteError("apply the builder schedule push", error);
+        setPushPreviewValidation({ field: null, message: buildScheduleErrorMessage("apply the builder schedule push", error) });
       }
       return;
     }
-    window.alert("This builder schedule push cannot be persisted until the workflow is backed by schedule_events.");
-    setPushPreview(null);
+    setPushPreviewValidation({ field: null, message: "This builder schedule push cannot be persisted until the workflow is backed by schedule_events." });
   };
 
   const saveCustomerEdit = async draft => {
@@ -4517,6 +4844,7 @@ export default function AdminWorkspace({
           latestRescheduleReasons={latestRescheduleReasons}
           profileDisplayNames={profileDisplayNames}
           onBack={() => setSelectedCalendarJobId(null)}
+          backLabel="Back to Calendar"
           onSaveJob={job => {
             if (!canManageSchedule || !job.databaseId) return;
             void updateScheduleEvent(job.databaseId, {
@@ -4535,7 +4863,7 @@ export default function AdminWorkspace({
       );
     }
     if (selectedJob) {
-      return <JobDetailView job={selectedJob} crews={crews} latestRescheduleReasons={latestRescheduleReasons} profileDisplayNames={profileDisplayNames} onBack={() => setSelectedJobId(null)} onSaveJob={job => {
+      return <JobDetailView job={selectedJob} crews={crews} latestRescheduleReasons={latestRescheduleReasons} profileDisplayNames={profileDisplayNames} onBack={() => setSelectedJobId(null)} backLabel="Back to Jobs" onSaveJob={job => {
         if (!canManageSchedule) return;
         if (job.schedule_type === "residential" && job.scheduleEventDatabaseId) {
           void updateScheduleEvent(job.scheduleEventDatabaseId, {
@@ -4595,7 +4923,7 @@ export default function AdminWorkspace({
     }
     if (section === "dashboard") return <DashboardHomeSection tickets={tickets} jobs={jobs} events={allEvents} conflicts={activeConflicts} setSection={navigateToAdminSection} />;
     if (section === "tickets") return <EstimateTicketsSection tickets={tickets} ticketsLoading={ticketsLoading} ticketsError={ticketsError} onSelectTicket={ticket => setSelectedTicketId(ticket.id)} onAcceptTicket={ticket => applyTicketStatus(ticket, "Estimate Accepted", "Estimate accepted and ready for office scheduling.")} onScheduleTicket={openResidentialSchedule} jobs={jobs} scheduledEstimateDatabaseIds={scheduledEstimateDatabaseIds} />;
-    if (section === "calendar") return <CalendarSection events={scheduleEvents} crews={crews} onOpenJob={jobId => setSelectedCalendarJobId(jobId)} pendingResidentialDraft={canManageSchedule ? residentialDraft : null} onPendingResidentialDraftChange={setResidentialDraft} onSavePendingResidentialSchedule={saveResidentialSchedule} onCancelPendingResidentialSchedule={() => setResidentialDraft(null)} pendingBuilderSchedule={canManageSchedule ? builderScheduleDraft : null} onPendingBuilderScheduleChange={setBuilderScheduleDraft} onSavePendingBuilderSchedule={saveBuilderSchedule} onCancelPendingBuilderSchedule={() => setBuilderScheduleDraft(null)} readOnly={calendarReadOnly} loading={scheduleLoading} error={scheduleError} />;
+    if (section === "calendar") return <CalendarSection events={scheduleEvents} crews={crews} onOpenJob={jobId => setSelectedCalendarJobId(jobId)} pendingResidentialDraft={canManageSchedule ? residentialDraft : null} onPendingResidentialDraftChange={setResidentialDraft} onSavePendingResidentialSchedule={saveResidentialSchedule} onCancelPendingResidentialSchedule={() => { setResidentialDraft(null); setResidentialValidation(null); }} pendingBuilderSchedule={canManageSchedule ? builderScheduleDraft : null} onPendingBuilderScheduleChange={setBuilderScheduleDraft} onSavePendingBuilderSchedule={saveBuilderSchedule} onCancelPendingBuilderSchedule={() => { setBuilderScheduleDraft(null); setBuilderScheduleValidation(null); }} readOnly={calendarReadOnly} loading={scheduleLoading} error={scheduleError} residentialValidation={residentialValidation} onResidentialValidationReset={() => setResidentialValidation(null)} builderValidation={builderScheduleValidation} onBuilderValidationReset={() => setBuilderScheduleValidation(null)} />;
     if (section === "jobs") return <JobsSection jobs={jobs} loading={jobsLoading} error={jobsError} onSelectJob={jobId => setSelectedJobId(jobId)} onCreateBuilderJob={openBuilderJobModal} canCreateBuilderJob={canManageSchedule} />;
     if (section === "customers") return <CustomersSection customers={customers} loading={customersLoading} error={customersError} tickets={tickets} jobs={jobs} onSelectCustomer={openQuickViewForCustomer} search={customerSearch} onSearchChange={setCustomerSearch} typeFilter={customerTypeFilter} onTypeFilterChange={setCustomerTypeFilter} statusFilter={customerStatusFilter} onStatusFilterChange={setCustomerStatusFilter} />;
     if (section === "crews") return <CrewsSection crews={crews} jobs={jobs} onCreateCrew={createCrew} onUpdateCrew={updateCrew} />;
@@ -4606,7 +4934,7 @@ export default function AdminWorkspace({
 
   return (
     <div className="admin-page-shell" style={{ minHeight: "100vh", background: "#F4F6F3" }}>
-      {!selectedTicket && !selectedJob && !selectedCalendarJob && (
+      {!selectedTicket && (
         <div className="admin-shell">
           <AdminSidebar
             section={section}
@@ -4636,7 +4964,7 @@ export default function AdminWorkspace({
           </div>
         </div>
       )}
-      {(selectedTicket || selectedJob || selectedCalendarJob) && content}
+      {selectedTicket && content}
 
       {quickViewCustomer && (
         <CustomerQuickViewModal
@@ -4682,8 +5010,8 @@ export default function AdminWorkspace({
           onConfirm={confirmDeactivateCustomer}
         />
       )}
-      {canManageSchedule && builderWorkflowDraft && <BuilderWorkflowScheduleModal draft={builderWorkflowDraft} crews={crews} onClose={() => setBuilderWorkflowDraft(null)} onSave={saveInitialBuilderWorkflow} />}
-      {canManageSchedule && phaseDraft && <PhaseEditModal draft={phaseDraft} crews={crews} onClose={() => setPhaseDraft(null)} onSave={phaseDraft.isResidential ? saveResidentialReschedule : saveBuilderPhase} isResidential={phaseDraft.isResidential} />}
+      {canManageSchedule && builderWorkflowDraft && <BuilderWorkflowScheduleModal draft={builderWorkflowDraft} crews={crews} onClose={() => { setBuilderWorkflowDraft(null); setBuilderWorkflowValidation(null); }} onSave={saveInitialBuilderWorkflow} validation={builderWorkflowValidation} onValidationReset={() => setBuilderWorkflowValidation(null)} />}
+      {canManageSchedule && phaseDraft && <PhaseEditModal draft={phaseDraft} crews={crews} onClose={() => { setPhaseDraft(null); setPhaseDraftValidation(null); }} onSave={phaseDraft.isResidential ? saveResidentialReschedule : saveBuilderPhase} isResidential={phaseDraft.isResidential} validation={phaseDraftValidation} onValidationReset={() => setPhaseDraftValidation(null)} />}
       {phaseDetailState && (
         <BuilderPhaseDetailsModal
           detail={phaseDetailState}
@@ -4707,7 +5035,7 @@ export default function AdminWorkspace({
           }}
         />
       )}
-      {canManageSchedule && pushPreview && <PushSummaryModal preview={pushPreview} onClose={() => setPushPreview(null)} onConfirm={reason => applyPushPreview("", reason)} />}
+      {canManageSchedule && pushPreview && <PushSummaryModal preview={pushPreview} onClose={() => { setPushPreview(null); setPushPreviewValidation(null); }} onConfirm={reason => applyPushPreview("", reason)} validation={pushPreviewValidation} onValidationReset={() => setPushPreviewValidation(null)} />}
       {canManageSchedule && weekendOverrideState && (
         <WeekendOverrideModal
           state={weekendOverrideState}

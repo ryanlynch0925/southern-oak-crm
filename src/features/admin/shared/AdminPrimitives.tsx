@@ -22,15 +22,15 @@ export function Card({ children, style = {}, className = "", ...props }) {
 
 export function Modal({ title, children, onClose, width = 720 }) {
   return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.45)", zIndex: 3000, padding: 20, overflowY: "auto" }}>
-      <div style={{ maxWidth: width, margin: "40px auto", background: B.white, borderRadius: 10, border: `1px solid ${B.border}`, overflow: "hidden" }}>
-        <div style={{ padding: "16px 18px", borderBottom: "0.5px solid var(--color-border-tertiary)", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+    <div className="admin-modal-overlay" role="dialog" aria-modal="true" style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.45)", zIndex: 3000, padding: 20, overflowY: "auto" }}>
+      <div className="admin-modal-shell" style={{ maxWidth: width, margin: "40px auto", background: B.white, borderRadius: 10, border: `1px solid ${B.border}`, overflow: "hidden" }}>
+        <div className="admin-modal-header" style={{ padding: "16px 18px", borderBottom: "0.5px solid var(--color-border-tertiary)", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
           <div style={{ fontSize: "1rem", fontWeight: 700, color: B.dark }}>{title}</div>
           <button onClick={onClose} style={{ background: "none", border: "none", color: B.gray, cursor: "pointer", fontSize: "1rem" }}>
             <i className="ti ti-x" aria-hidden="true" />
           </button>
         </div>
-        <div style={{ padding: 18 }}>{children}</div>
+        <div className="admin-modal-body" style={{ padding: 18 }}>{children}</div>
       </div>
     </div>
   );

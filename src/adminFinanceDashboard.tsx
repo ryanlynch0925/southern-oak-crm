@@ -2,11 +2,6 @@
 import {
   financeJobs,
   lowMarginJobs,
-  revenueCustomerTypeDetails,
-  revenueItems,
-  revenueServiceTypeDetails,
-  revenueStatusDetails,
-  revenueSummary,
 } from "./data/financeData";
 import {
   createExpense,
@@ -15,12 +10,14 @@ import {
   fetchFinanceExpensesSnapshot,
   fetchFinanceOverviewSummary,
   fetchFinancePaymentsSnapshot,
+  fetchFinanceRevenueSnapshot,
   type CreateExpenseInput,
   type ExpenseCategory,
   type FinanceExpenseRecord,
   type FinanceOverviewSummary,
   type FinancePaymentRecord,
   type FinanceReceivableRecord,
+  type FinanceRevenueRecord,
 } from "./features/admin/services/financeService";
 import type { AppRole } from "./features/admin/auth/roles";
 import type { FrontendJob, FrontendJobPhase } from "./features/admin/jobs/jobUtils";
@@ -36,10 +33,10 @@ const CARD = {
 const labelStyle = { display: "block", fontSize: ".74rem", fontWeight: 700, color: "var(--admin-muted)", marginBottom: 6 };
 const PAYMENT_METHODS = ["Cash", "Check", "ACH", "Card", "Other"];
 const EXPENSE_EMPTY_VALUE = "-";
-const FINANCE_REVENUE_ITEMS_STORAGE_KEY = "southernOakFinanceRevenueItems";
 const LEGACY_FINANCE_PAYMENTS_STORAGE_KEY = "southernOakFinancePayments";
 const LEGACY_FINANCE_RECEIVABLES_STORAGE_KEY = "southernOakFinanceReceivables";
 const OVERVIEW_FILTER_HELPER_TEXT = "Overview currently shows all-time totals";
+const REVENUE_FILTER_HELPER_TEXT = "Revenue currently shows all-time invoice records. Global finance filters are not connected to this view yet.";
 const EXPENSE_FILTER_HELPER_TEXT = "Expenses currently shows all-time records. Global finance filters are not connected to this view yet.";
 const EXPENSE_CATEGORY_LABELS: Record<ExpenseCategory, string> = {
   material: "Material",
@@ -89,18 +86,6 @@ function isPastDue(dueDate: string | null | undefined, balanceDue: number, statu
 function computeDaysOverdue(dueDate: string | null | undefined, balanceDue: number, status?: string | null) {
   if (!isPastDue(dueDate, balanceDue, status) || !dueDate) return null;
   return Math.max(0, Math.round((getTodayLocalDateAtNoon().getTime() - getLocalDateAtNoon(dueDate).getTime()) / 86400000));
-}
-
-function parseStoredArray<T>(key: string, fallback: T[]) {
-  if (typeof window === "undefined") return fallback;
-  try {
-    const raw = window.localStorage.getItem(key);
-    if (!raw) return fallback;
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : fallback;
-  } catch {
-    return fallback;
-  }
 }
 
 function getInitialPaymentDraft(selectedKey = "") {
@@ -328,6 +313,7 @@ function statusBadge(status: string) {
   const map: Record<string, { color: string; background: string }> = {
     Paid: { color: "#25603C", background: "#DFF0E5" },
     Partial: { color: "#8A6A12", background: "#F8F1D9" },
+    Unpaid: { color: "#7B5E12", background: "#F7EFD5" },
     Sent: { color: "#275A85", background: "#E2ECF4" },
     Draft: { color: "#5C6572", background: "#EEF1F4" },
     Overdue: { color: "#A14B40", background: "#F9E8E4" },
@@ -779,6 +765,8 @@ function FinanceHeaderCard({
   const [status, setStatus] = useState("All Statuses");
   const filtersDisabledReason = financeView === "overview"
     ? OVERVIEW_FILTER_HELPER_TEXT
+    : financeView === "revenue"
+      ? REVENUE_FILTER_HELPER_TEXT
     : financeView === "expenses"
       ? EXPENSE_FILTER_HELPER_TEXT
       : "";
@@ -956,127 +944,249 @@ function NeedsAttentionSection() {
   );
 }
 
-function RevenueView({
-  onFinanceViewChange: _onFinanceViewChange,
-  revenueItemsData,
-}: {
-  onFinanceViewChange: (value: string) => void;
-  revenueItemsData: any[];
-}) {
-  const leadingCustomerType = [...revenueCustomerTypeDetails].sort((a, b) => b.revenue - a.revenue)[0];
-  const revenueStageBadge = (status: string) => {
-    const tones: Record<string, { color: string; background: string }> = {
-      Completed: { color: "#25603C", background: "#E6F3EA" },
-      Paid: { color: "#25603C", background: "#DFF0E5" },
-      Scheduled: { color: "#8A6A12", background: "#F8F1D9" },
-      "In Progress": { color: "#5B4A88", background: "#EEE9F8" },
-      "Estimate Accepted": { color: "#25603C", background: "#E6F3EA" },
-      Lost: { color: "#A14B40", background: "#F9E8E4" },
+type RevenueDisplayRecord = {
+  invoiceId: string;
+  invoiceNumber: string;
+  invoiceDate: string;
+  dueDate: string | null;
+  customerJob: string;
+  context: string;
+  contextNote: string;
+  totalAmount: number;
+  amountPaid: number;
+  balanceDue: number;
+  statusLabel: string;
+  badgeTone: { color: string; background: string };
+  daysOverdue: number | null;
+};
+
+function buildRevenueDisplayRecord(
+  item: FinanceRevenueRecord,
+  linkedJob: FrontendJob | undefined
+): RevenueDisplayRecord {
+  const daysOverdue = computeDaysOverdue(item.dueDate, item.balanceDue, item.rawStatus || item.statusLabel);
+  const badgeTone = daysOverdue !== null ? statusBadge("Overdue") : statusBadge(item.statusLabel);
+
+  if (linkedJob?.schedule_type === "builder_slab") {
+    const customerJob = linkedJob.builder_name || linkedJob.name || item.customerName || "Builder invoice";
+    const context = [
+      linkedJob.community ? `Community ${linkedJob.community}` : "",
+      linkedJob.lot_number ? `Lot ${linkedJob.lot_number}` : "",
+      linkedJob.name && linkedJob.name !== customerJob ? linkedJob.name : "",
+    ].filter(Boolean).join(" • ") || "Builder lot / job";
+
+    return {
+      invoiceId: item.invoiceId,
+      invoiceNumber: item.invoiceNumber,
+      invoiceDate: item.invoiceDate,
+      dueDate: item.dueDate,
+      customerJob,
+      context,
+      contextNote: "",
+      totalAmount: item.totalAmount,
+      amountPaid: item.amountPaid,
+      balanceDue: item.balanceDue,
+      statusLabel: item.statusLabel,
+      badgeTone,
+      daysOverdue,
     };
-    return tones[status] || { color: "var(--admin-text)", background: "var(--admin-card-soft)" };
+  }
+
+  if (linkedJob) {
+    const customerJob = linkedJob.customer_name || item.customerName || linkedJob.name || "Residential job";
+    const context = linkedJob.job_type || linkedJob.name || "Residential job";
+    const contextNote = [
+      linkedJob.name && linkedJob.name !== customerJob && linkedJob.name !== context ? linkedJob.name : "",
+      formatPurchaseOrderDisplay(linkedJob.work_order_number),
+    ].filter(Boolean).join(" • ");
+
+    return {
+      invoiceId: item.invoiceId,
+      invoiceNumber: item.invoiceNumber,
+      invoiceDate: item.invoiceDate,
+      dueDate: item.dueDate,
+      customerJob,
+      context,
+      contextNote,
+      totalAmount: item.totalAmount,
+      amountPaid: item.amountPaid,
+      balanceDue: item.balanceDue,
+      statusLabel: item.statusLabel,
+      badgeTone,
+      daysOverdue,
+    };
+  }
+
+  return {
+    invoiceId: item.invoiceId,
+    invoiceNumber: item.invoiceNumber,
+    invoiceDate: item.invoiceDate,
+    dueDate: item.dueDate,
+    customerJob: item.customerName || item.invoiceNumber || "Invoice",
+    context: item.jobId ? "Linked job unavailable" : "Invoice not linked to a job",
+    contextNote: "",
+    totalAmount: item.totalAmount,
+    amountPaid: item.amountPaid,
+    balanceDue: item.balanceDue,
+    statusLabel: item.statusLabel,
+    badgeTone,
+    daysOverdue,
   };
+}
+
+function RevenueSummaryCards({ revenueItems }: { revenueItems: FinanceRevenueRecord[] }) {
+  const totalInvoiced = revenueItems.reduce((sum, row) => sum + Number(row.totalAmount || 0), 0);
+  const totalCollected = revenueItems.reduce((sum, row) => sum + Number(row.amountPaid || 0), 0);
+  const outstandingBalance = revenueItems.reduce((sum, row) => sum + Number(row.balanceDue || 0), 0);
+
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 14 }}>
-        {revenueSummary.map(item => (
-          <div key={item.id} className="finance-kpi-card">
-            <div className="finance-kpi-label">{item.label}</div>
-            <div className="finance-kpi-value" style={{ marginTop: 10 }}>{fmtMoney(item.value)}</div>
-            <div className="finance-kpi-subtitle">{item.subtitle}</div>
-          </div>
-        ))}
-      </div>
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 14 }}>
+      {[
+        { label: "Total Invoiced", value: fmtMoney(totalInvoiced), subtitle: "Original invoice amounts" },
+        { label: "Total Collected", value: fmtMoney(totalCollected), subtitle: "Payments applied to loaded invoices" },
+        { label: "Outstanding Balance", value: fmtMoney(outstandingBalance), subtitle: "Remaining receivable balance" },
+        { label: "Invoice Count", value: String(revenueItems.length), subtitle: "Loaded invoice rows" },
+      ].map((card) => (
+        <div key={card.label} className="finance-kpi-card">
+          <div className="finance-kpi-label">{card.label}</div>
+          <div className="finance-kpi-value" style={{ marginTop: 10 }}>{card.value}</div>
+          <div className="finance-kpi-subtitle">{card.subtitle}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
 
-      <SectionCard title="Revenue Items" subtitle="Detailed job revenue records for this period.">
-        <FinanceTable
-          columns={["Customer / Builder", "Job / Project", "Service Type", "Customer Type", "Status", "Revenue", "Paid", "Balance", "Date / Stage"]}
-          rows={revenueItemsData}
-          renderRow={row => {
-            const badge = revenueStageBadge(row.status);
-            return (
-              <tr key={`${row.customerBuilder}-${row.project}`} style={{ borderBottom: "1px solid var(--admin-border)" }}>
-                <td style={{ padding: "12px", fontWeight: 700 }}>{row.customerBuilder}</td>
-                <td style={{ padding: "12px", color: "var(--admin-muted)" }}>{row.project}</td>
-                <td style={{ padding: "12px" }}>{row.serviceType}</td>
-                <td style={{ padding: "12px", color: "var(--admin-muted)" }}>{row.customerType}</td>
-                <td style={{ padding: "12px" }}>
-                  <span style={{ display: "inline-block", padding: "4px 10px", borderRadius: 999, background: badge.background, color: badge.color, fontSize: ".74rem", fontWeight: 700 }}>
-                    {row.status}
-                  </span>
-                </td>
-                <td style={{ padding: "12px", fontWeight: 700 }}>{fmtMoney(row.revenue)}</td>
-                <td style={{ padding: "12px" }}>{fmtMoney(row.paid)}</td>
-                <td style={{ padding: "12px", fontWeight: 700 }}>{fmtMoney(row.balance)}</td>
-                <td style={{ padding: "12px", color: "var(--admin-muted)" }}>{fmtDate(row.dateStage)}</td>
-              </tr>
-            );
+function RevenueItemsList({
+  revenueItems,
+  jobsById,
+}: {
+  revenueItems: FinanceRevenueRecord[];
+  jobsById: Map<string, FrontendJob>;
+}) {
+  const displayItems = useMemo(
+    () => revenueItems.map((item) => buildRevenueDisplayRecord(item, item.jobId ? jobsById.get(item.jobId) : undefined)),
+    [jobsById, revenueItems]
+  );
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      {displayItems.map((item) => (
+        <div
+          key={item.invoiceId}
+          style={{
+            border: "1px solid var(--admin-border)",
+            borderRadius: 14,
+            background: "var(--admin-card-bg)",
+            padding: 14,
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit,minmax(140px,1fr))",
+            gap: 12,
           }}
-        />
-      </SectionCard>
-
-      <SectionCard title="Revenue by Job Status" subtitle="Detailed pipeline dollars by stage. Percentages compare each stage to total tracked revenue and are not additive.">
-        <FinanceTable
-          columns={["Status", "Jobs / Estimates", "Revenue Amount", "Percent of Total", "Notes / Next Action"]}
-          rows={revenueStatusDetails}
-          renderRow={row => (
-            <tr key={row.status} style={{ borderBottom: "1px solid var(--admin-border)" }}>
-              <td style={{ padding: "12px", fontWeight: 700 }}>{row.status}</td>
-              <td style={{ padding: "12px", color: "var(--admin-muted)" }}>{row.count}</td>
-              <td style={{ padding: "12px", fontWeight: 700 }}>{fmtMoney(row.revenue)}</td>
-              <td style={{ padding: "12px", color: "var(--admin-muted)" }}>{row.percentOfTotal.toFixed(1)}%</td>
-              <td style={{ padding: "12px", color: "var(--admin-muted)" }}>{row.note}</td>
-            </tr>
-          )}
-        />
-      </SectionCard>
-
-      <SectionCard title="Revenue by Service Type" subtitle="Revenue concentration by service line.">
-        <FinanceTable
-          columns={["Service Type", "Number of Jobs", "Revenue", "Percent of Revenue", "Average Job Value"]}
-          rows={revenueServiceTypeDetails}
-          renderRow={row => (
-            <tr key={row.serviceType} style={{ borderBottom: "1px solid var(--admin-border)" }}>
-              <td style={{ padding: "12px", fontWeight: 700 }}>{row.serviceType}</td>
-              <td style={{ padding: "12px", color: "var(--admin-muted)" }}>{row.count}</td>
-              <td style={{ padding: "12px", fontWeight: 700 }}>{fmtMoney(row.revenue)}</td>
-              <td style={{ padding: "12px", color: "var(--admin-muted)" }}>{row.percentOfRevenue.toFixed(1)}%</td>
-              <td style={{ padding: "12px", color: "var(--admin-muted)" }}>{fmtMoney(row.averageJobValue)}</td>
-            </tr>
-          )}
-        />
-      </SectionCard>
-
-      <SectionCard title="Residential vs Builder" subtitle="Detailed comparison by customer type.">
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(280px,1fr))", gap: 16 }}>
-          {revenueCustomerTypeDetails.map(item => (
-            <div key={item.customerType} className="finance-mini-card" style={{ padding: 18 }}>
-              <div className="finance-mini-label">{item.customerType}</div>
-              <div className="finance-mini-value">{fmtMoney(item.revenue)}</div>
-              <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                <div>
-                  <div className="finance-mini-label">Percent of total</div>
-                  <div style={{ marginTop: 4, fontWeight: 700, color: "var(--admin-text)" }}>{item.percentOfTotal}%</div>
-                </div>
-                <div>
-                  <div className="finance-mini-label">Number of jobs</div>
-                  <div style={{ marginTop: 4, fontWeight: 700, color: "var(--admin-text)" }}>{item.jobCount}</div>
-                </div>
-                <div>
-                  <div className="finance-mini-label">Average job value</div>
-                  <div style={{ marginTop: 4, fontWeight: 700, color: "var(--admin-text)" }}>{fmtMoney(item.averageJobValue)}</div>
-                </div>
-                <div>
-                  <div className="finance-mini-label">Leading note</div>
-                  <div style={{ marginTop: 4, color: "var(--admin-muted)", fontSize: ".78rem" }}>{item.note}</div>
-                </div>
+        >
+          {[
+            { label: "Invoice Date", value: fmtDate(item.invoiceDate) },
+            { label: "Invoice Number", value: item.invoiceNumber || EXPENSE_EMPTY_VALUE },
+            { label: "Customer / Job", value: item.customerJob },
+            {
+              label: "Job Type / Builder Context",
+              value: item.context,
+              secondary: item.contextNote || "",
+            },
+            { label: "Original Amount", value: fmtMoney(item.totalAmount) },
+            { label: "Amount Paid", value: fmtMoney(item.amountPaid) },
+            { label: "Balance Due", value: fmtMoney(item.balanceDue) },
+            {
+              label: "Due Date",
+              value: item.dueDate ? fmtDate(item.dueDate) : EXPENSE_EMPTY_VALUE,
+              secondary: item.daysOverdue === null ? "" : `${item.daysOverdue} day${item.daysOverdue === 1 ? "" : "s"} overdue`,
+            },
+          ].map((cell) => (
+            <div key={`${item.invoiceId}-${cell.label}`} style={{ minWidth: 0 }}>
+              <div style={{ fontSize: ".72rem", fontWeight: 700, color: "var(--admin-muted)", textTransform: "uppercase", letterSpacing: ".04em" }}>
+                {cell.label}
               </div>
+              <div style={{ marginTop: 6, fontWeight: cell.label === "Balance Due" || cell.label === "Original Amount" ? 700 : 600, color: "var(--admin-text)", lineHeight: 1.35 }}>
+                {cell.value}
+              </div>
+              {cell.secondary && (
+                <div style={{ marginTop: 4, fontSize: ".78rem", color: "var(--admin-muted)", lineHeight: 1.4 }}>
+                  {cell.secondary}
+                </div>
+              )}
             </div>
           ))}
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: ".72rem", fontWeight: 700, color: "var(--admin-muted)", textTransform: "uppercase", letterSpacing: ".04em" }}>
+              Status
+            </div>
+            <div style={{ marginTop: 6 }}>
+              <span style={{ display: "inline-block", padding: "4px 10px", borderRadius: 999, background: item.badgeTone.background, color: item.badgeTone.color, fontSize: ".74rem", fontWeight: 700 }}>
+                {item.statusLabel}
+              </span>
+            </div>
+            {item.daysOverdue !== null && (
+              <div style={{ marginTop: 4, fontSize: ".78rem", color: "#A14B40", lineHeight: 1.4 }}>
+                Past due
+              </div>
+            )}
+          </div>
         </div>
-        <div className="finance-insight-note">
-          {leadingCustomerType.customerType} is currently leading total revenue, while builder work continues to carry the stronger average job value.
+      ))}
+    </div>
+  );
+}
+
+function RevenueView({
+  revenueItems,
+  jobsById,
+  jobsLoading,
+  isLoading,
+  loadError,
+  onRetry,
+}: {
+  revenueItems: FinanceRevenueRecord[];
+  jobsById: Map<string, FrontendJob>;
+  jobsLoading: boolean;
+  isLoading: boolean;
+  loadError: string | null;
+  onRetry: () => void;
+}) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+        <div>
+          <div style={{ fontSize: "1.02rem", fontWeight: 800, color: "var(--admin-text)" }}>Revenue & Receivables</div>
+          <div style={{ fontSize: ".8rem", color: "var(--admin-muted)", marginTop: 2 }}>All-time invoice records backed by live Supabase invoice and payment data.</div>
         </div>
-      </SectionCard>
+        {!isLoading && !loadError && <RevenueSummaryCards revenueItems={revenueItems} />}
+      </div>
+
+      {isLoading ? (
+        <SectionCard title="Loading Revenue" subtitle="Fetching live invoice balances from Supabase.">
+          <FinanceEmptyState message="Loading invoice revenue and receivables..." />
+        </SectionCard>
+      ) : loadError ? (
+        <SectionCard
+          title="Unable to Load Revenue"
+          subtitle="The live revenue list could not be loaded."
+          action={(
+            <button className="oak-button oak-button--outline" style={{ minHeight: 36, padding: "6px 12px", borderRadius: 10, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }} onClick={onRetry}>
+              Retry
+            </button>
+          )}
+        >
+          <FinanceEmptyState message={loadError} />
+        </SectionCard>
+      ) : revenueItems.length === 0 ? (
+        <SectionCard title="Revenue Items" subtitle="All-time invoices from Supabase.">
+          <FinanceEmptyState message="No invoices or revenue items are available yet." />
+        </SectionCard>
+      ) : (
+        <SectionCard title="Revenue Items" subtitle={jobsLoading ? "All-time invoices from Supabase. Jobs are still loading for richer builder and PO labels." : "All-time invoices from Supabase."}>
+          <RevenueItemsList revenueItems={revenueItems} jobsById={jobsById} />
+        </SectionCard>
+      )}
     </div>
   );
 }
@@ -1255,7 +1365,7 @@ function FinanceDashboard({
   const [receivablesState, setReceivablesState] = useState<FinanceReceivableRecord[]>([]);
   const [paymentsState, setPaymentsState] = useState<FinancePaymentRecord[]>([]);
   const [expensesState, setExpensesState] = useState<FinanceExpenseRecord[]>([]);
-  const [revenueItemsState, setRevenueItemsState] = useState(() => parseStoredArray(FINANCE_REVENUE_ITEMS_STORAGE_KEY, revenueItems));
+  const [revenueItemsState, setRevenueItemsState] = useState<FinanceRevenueRecord[]>([]);
   const [overviewSummary, setOverviewSummary] = useState<FinanceOverviewSummary | null>(null);
   const [paymentDraft, setPaymentDraft] = useState<any | null>(null);
   const [expenseDraft, setExpenseDraft] = useState<ExpenseDraft | null>(null);
@@ -1263,6 +1373,9 @@ function FinanceDashboard({
   const [expenseErrors, setExpenseErrors] = useState<ExpenseDraftErrors>({});
   const [financeLoading, setFinanceLoading] = useState(true);
   const [financeError, setFinanceError] = useState<string | null>(null);
+  const [revenueLoading, setRevenueLoading] = useState(false);
+  const [revenueError, setRevenueError] = useState<string | null>(null);
+  const [revenueInitialized, setRevenueInitialized] = useState(false);
   const [expensesLoading, setExpensesLoading] = useState(false);
   const [expensesError, setExpensesError] = useState<string | null>(null);
   const [expensesInitialized, setExpensesInitialized] = useState(false);
@@ -1303,12 +1416,8 @@ function FinanceDashboard({
     if (typeof window === "undefined") return;
     window.localStorage.removeItem(LEGACY_FINANCE_PAYMENTS_STORAGE_KEY);
     window.localStorage.removeItem(LEGACY_FINANCE_RECEIVABLES_STORAGE_KEY);
+    window.localStorage.removeItem("southernOakFinanceRevenueItems");
   }, []);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    window.localStorage.setItem(FINANCE_REVENUE_ITEMS_STORAGE_KEY, JSON.stringify(revenueItemsState));
-  }, [revenueItemsState]);
 
   useEffect(() => {
     if (!canViewExpenses) {
@@ -1348,6 +1457,22 @@ function FinanceDashboard({
     }
   };
 
+  const refreshRevenueData = async () => {
+    setRevenueInitialized(true);
+    setRevenueLoading(true);
+    setRevenueError(null);
+
+    try {
+      const snapshot = await fetchFinanceRevenueSnapshot();
+      setRevenueItemsState(snapshot.items);
+    } catch (error) {
+      setRevenueItemsState([]);
+      setRevenueError(error instanceof Error ? error.message : "Unable to load revenue data.");
+    } finally {
+      setRevenueLoading(false);
+    }
+  };
+
   const refreshExpensesData = async () => {
     if (!canViewExpenses) {
       return;
@@ -1380,6 +1505,14 @@ function FinanceDashboard({
 
     void refreshExpensesData();
   }, [canViewExpenses, financeView, expensesInitialized]);
+
+  useEffect(() => {
+    if (financeView !== "revenue" || revenueInitialized) {
+      return;
+    }
+
+    void refreshRevenueData();
+  }, [financeView, revenueInitialized]);
 
   const openPaymentModal = (receivableKey = "") => {
     const selected = receivableOptions.find(item => item.key === receivableKey);
@@ -1446,8 +1579,11 @@ function FinanceDashboard({
         referenceNumber: paymentDraft.reference,
         notes: paymentDraft.notes,
       });
-      await refreshPaymentsData();
-      await refreshOverviewSummary();
+      await Promise.all([
+        refreshPaymentsData(),
+        refreshRevenueData(),
+        refreshOverviewSummary(),
+      ]);
       setPaymentDraft(null);
       setPaymentErrors([]);
     } catch (error) {
@@ -1555,7 +1691,18 @@ function FinanceDashboard({
         </>
       )}
 
-      {financeView === "revenue" && <RevenueView onFinanceViewChange={onFinanceViewChange} revenueItemsData={revenueItemsState} />}
+      {financeView === "revenue" && (
+        <RevenueView
+          revenueItems={revenueItemsState}
+          jobsById={jobsById}
+          jobsLoading={jobsLoading}
+          isLoading={revenueLoading}
+          loadError={revenueError}
+          onRetry={() => {
+            void refreshRevenueData();
+          }}
+        />
+      )}
       {financeView === "payments" && (
         <PaymentsView
           receivablesData={receivablesState}

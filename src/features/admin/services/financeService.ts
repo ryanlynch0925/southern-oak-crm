@@ -7,7 +7,7 @@ interface SupabaseErrorSummary {
   hint?: string;
 }
 
-interface InvoicePaymentSummaryRow {
+export interface FinanceRevenueSourceRow {
   invoice_id: string;
   customer_id: string;
   job_id: string | null;
@@ -97,6 +97,21 @@ export interface FinanceReceivableRecord {
   invoiceProject: string;
 }
 
+export interface FinanceRevenueRecord {
+  invoiceId: string;
+  customerId: string;
+  jobId: string | null;
+  invoiceNumber: string;
+  invoiceDate: string;
+  dueDate: string | null;
+  totalAmount: number;
+  amountPaid: number;
+  balanceDue: number;
+  rawStatus: string | null;
+  statusLabel: string;
+  customerName: string;
+}
+
 export interface FinancePaymentRecord {
   id: string;
   invoiceId: string;
@@ -128,6 +143,10 @@ export interface FinanceExpenseRecord {
 export interface FinancePaymentsSnapshot {
   receivables: FinanceReceivableRecord[];
   payments: FinancePaymentRecord[];
+}
+
+export interface FinanceRevenueSnapshot {
+  items: FinanceRevenueRecord[];
 }
 
 export interface FinanceExpensesSnapshot {
@@ -216,6 +235,37 @@ function toStatusLabel(value: string | null | undefined) {
     .join(" ");
 }
 
+function getTodayIsoDate() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function toInvoiceNumber(value: string | null | undefined) {
+  return value?.trim() || "Invoice";
+}
+
+function resolveInvoiceStatusLabel(row: Pick<FinanceRevenueSourceRow, "status" | "amount_paid" | "balance_due" | "due_date">) {
+  if (row.status?.trim()) {
+    return toStatusLabel(row.status);
+  }
+
+  const amountPaid = toMoney(row.amount_paid);
+  const balanceDue = toMoney(row.balance_due);
+
+  if (balanceDue <= 0) {
+    return "Paid";
+  }
+
+  if (amountPaid > 0) {
+    return "Partial";
+  }
+
+  if (row.due_date && row.due_date < getTodayIsoDate()) {
+    return "Overdue";
+  }
+
+  return "Unpaid";
+}
+
 function isExpenseCategory(value: string | null | undefined): value is ExpenseCategory {
   return EXPENSE_CATEGORY_VALUES.includes(String(value || "") as ExpenseCategory);
 }
@@ -271,18 +321,26 @@ async function fetchJobLookup(jobIds: string[]) {
   return new Map((data || []).map((row) => [row.id, row as JobLookupRow]));
 }
 
-async function fetchReceivableSummaryRows() {
-  const { data, error } = await supabase
+async function fetchInvoiceSummaryRows(orderMode: "receivables" | "revenue") {
+  let query = supabase
     .from("invoice_payment_summary")
-    .select("invoice_id, customer_id, job_id, invoice_number, invoice_date, due_date, total_amount, status, amount_paid, balance_due")
-    .order("due_date", { ascending: true })
-    .order("invoice_date", { ascending: false });
+    .select("invoice_id, customer_id, job_id, invoice_number, invoice_date, due_date, total_amount, status, amount_paid, balance_due");
+
+  query = orderMode === "revenue"
+    ? query.order("invoice_date", { ascending: false })
+    : query.order("due_date", { ascending: true })
+      .order("invoice_date", { ascending: false });
+
+  const { data, error } = await query;
 
   if (error) {
-    throwFinanceServiceError("Unable to load receivables", error);
+    throwFinanceServiceError(
+      orderMode === "revenue" ? "Unable to load revenue invoices" : "Unable to load receivables",
+      error
+    );
   }
 
-  return (data || []) as InvoicePaymentSummaryRow[];
+  return (data || []) as FinanceRevenueSourceRow[];
 }
 
 async function fetchPaymentRows() {
@@ -334,14 +392,14 @@ export async function fetchFinanceOverviewSummary(): Promise<FinanceOverviewSumm
 }
 
 function mapReceivables(
-  summaryRows: InvoicePaymentSummaryRow[],
+  summaryRows: FinanceRevenueSourceRow[],
   customerLookup: Map<string, CustomerLookupRow>,
   jobLookup: Map<string, JobLookupRow>
 ) {
   return summaryRows.map((row) => {
     const customerName = formatCustomerName(customerLookup.get(row.customer_id));
     const jobName = row.job_id ? jobLookup.get(row.job_id)?.job_name?.trim() || "" : "";
-    const invoiceNumber = row.invoice_number?.trim() || "Invoice";
+    const invoiceNumber = toInvoiceNumber(row.invoice_number);
     const project = jobName || invoiceNumber;
     const invoiceProject = [invoiceNumber, jobName].filter(Boolean).join(" - ") || invoiceNumber;
 
@@ -355,12 +413,32 @@ function mapReceivables(
       totalAmount: toMoney(row.total_amount),
       amountPaid: toMoney(row.amount_paid),
       balanceDue: toMoney(row.balance_due),
-      status: toStatusLabel(row.status),
+      status: resolveInvoiceStatusLabel(row),
       customer: customerName,
       project,
       invoiceProject,
     } satisfies FinanceReceivableRecord;
   });
+}
+
+function mapRevenueItems(
+  summaryRows: FinanceRevenueSourceRow[],
+  customerLookup: Map<string, CustomerLookupRow>
+) {
+  return summaryRows.map((row) => ({
+    invoiceId: row.invoice_id,
+    customerId: row.customer_id,
+    jobId: row.job_id,
+    invoiceNumber: toInvoiceNumber(row.invoice_number),
+    invoiceDate: row.invoice_date,
+    dueDate: row.due_date,
+    totalAmount: toMoney(row.total_amount),
+    amountPaid: toMoney(row.amount_paid),
+    balanceDue: toMoney(row.balance_due),
+    rawStatus: row.status,
+    statusLabel: resolveInvoiceStatusLabel(row),
+    customerName: formatCustomerName(customerLookup.get(row.customer_id)),
+  } satisfies FinanceRevenueRecord));
 }
 
 function mapPayments(
@@ -442,7 +520,7 @@ function mapExpenses(expenseRows: ExpenseRow[]) {
 }
 
 export async function fetchFinancePaymentsSnapshot(): Promise<FinancePaymentsSnapshot> {
-  const summaryRows = await fetchReceivableSummaryRows();
+  const summaryRows = await fetchInvoiceSummaryRows("receivables");
 
   const customerIds = [...new Set(summaryRows.map((row) => row.customer_id).filter(Boolean))];
   const jobIds = [...new Set(summaryRows.map((row) => row.job_id).filter((value): value is string => !!value))];
@@ -457,6 +535,16 @@ export async function fetchFinancePaymentsSnapshot(): Promise<FinancePaymentsSna
   const payments = mapPayments(paymentRows, receivables);
 
   return { receivables, payments };
+}
+
+export async function fetchFinanceRevenueSnapshot(): Promise<FinanceRevenueSnapshot> {
+  const summaryRows = await fetchInvoiceSummaryRows("revenue");
+  const customerIds = [...new Set(summaryRows.map((row) => row.customer_id).filter(Boolean))];
+  const customerLookup = await fetchCustomerLookup(customerIds);
+
+  return {
+    items: mapRevenueItems(summaryRows, customerLookup),
+  };
 }
 
 export async function fetchFinanceExpensesSnapshot(): Promise<FinanceExpensesSnapshot> {

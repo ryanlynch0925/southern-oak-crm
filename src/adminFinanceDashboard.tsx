@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type KeyboardEvent, type ReactNode } from "react";
+﻿import { useEffect, useMemo, useState, type KeyboardEvent, type ReactNode } from "react";
 import {
   financeJobs,
   lowMarginJobs,
@@ -9,13 +9,21 @@ import {
   revenueSummary,
 } from "./data/financeData";
 import {
+  createExpense,
   createPayment,
+  EXPENSE_CATEGORY_VALUES,
+  fetchFinanceExpensesSnapshot,
   fetchFinanceOverviewSummary,
   fetchFinancePaymentsSnapshot,
+  type CreateExpenseInput,
+  type ExpenseCategory,
+  type FinanceExpenseRecord,
   type FinanceOverviewSummary,
   type FinancePaymentRecord,
   type FinanceReceivableRecord,
 } from "./features/admin/services/financeService";
+import type { AppRole } from "./features/admin/auth/roles";
+import type { FrontendJob, FrontendJobPhase } from "./features/admin/jobs/jobUtils";
 
 const CARD = {
   background: "var(--admin-card-bg)",
@@ -27,10 +35,25 @@ const CARD = {
 
 const labelStyle = { display: "block", fontSize: ".74rem", fontWeight: 700, color: "var(--admin-muted)", marginBottom: 6 };
 const PAYMENT_METHODS = ["Cash", "Check", "ACH", "Card", "Other"];
+const EXPENSE_EMPTY_VALUE = "-";
 const FINANCE_REVENUE_ITEMS_STORAGE_KEY = "southernOakFinanceRevenueItems";
 const LEGACY_FINANCE_PAYMENTS_STORAGE_KEY = "southernOakFinancePayments";
 const LEGACY_FINANCE_RECEIVABLES_STORAGE_KEY = "southernOakFinanceReceivables";
 const OVERVIEW_FILTER_HELPER_TEXT = "Overview currently shows all-time totals";
+const EXPENSE_FILTER_HELPER_TEXT = "Expenses currently shows all-time records. Global finance filters are not connected to this view yet.";
+const EXPENSE_CATEGORY_LABELS: Record<ExpenseCategory, string> = {
+  material: "Material",
+  labor: "Labor",
+  fuel: "Fuel",
+  equipment: "Equipment",
+  subcontractor: "Subcontractor",
+  dump_fee: "Dump Fee",
+  office: "Office",
+  software: "Software",
+  insurance: "Insurance",
+  general: "General",
+  other: "Other",
+};
 
 const fmtMoney = (value: number) => `$${value.toLocaleString()}`;
 const fmtDate = (value: string) => new Date(`${value}T12:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
@@ -96,6 +119,129 @@ function getOverdueWarningText(overdueCount: number) {
   if (overdueCount === 0) return "No receivables past due";
   if (overdueCount === 1) return "1 receivable past due";
   return `${overdueCount} receivables past due`;
+}
+
+function isExpenseRole(role: AppRole | null | undefined) {
+  return role === "owner" || role === "admin";
+}
+
+function getExpenseCategoryLabel(category: ExpenseCategory | string) {
+  return EXPENSE_CATEGORY_LABELS[category as ExpenseCategory] || EXPENSE_CATEGORY_LABELS.other;
+}
+
+function isValidDateInput(value: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(year, month - 1, day);
+  return date.getFullYear() === year && date.getMonth() === month - 1 && date.getDate() === day;
+}
+
+function toCompactText(value: string, maxLength = 88) {
+  const normalized = value.trim();
+  if (!normalized) return "";
+  return normalized.length <= maxLength
+    ? normalized
+    : `${normalized.slice(0, maxLength - 1).trimEnd()}...`;
+}
+
+function formatPurchaseOrderDisplay(value: string | null | undefined) {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) return "";
+  return /^po\b/i.test(trimmed) ? trimmed : `PO ${trimmed}`;
+}
+
+function formatPaymentMethodDisplay(value: string | null | undefined) {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) return "";
+
+  const normalized = trimmed.toLowerCase();
+  const commonLabels: Record<string, string> = {
+    cash: "Cash",
+    card: "Card",
+    check: "Check",
+    ach: "ACH",
+    "credit card": "Credit Card",
+    "debit card": "Debit Card",
+    "bank transfer": "Bank Transfer",
+  };
+
+  if (commonLabels[normalized]) {
+    return commonLabels[normalized];
+  }
+
+  return normalized
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((part) => /^[a-z]+$/i.test(part)
+      ? part.charAt(0).toUpperCase() + part.slice(1)
+      : part.toUpperCase())
+    .join(" ");
+}
+
+function isValidExpenseAmount(value: string) {
+  const trimmed = value.trim();
+  if (!/^\d+(\.\d{1,2})?$/.test(trimmed)) {
+    return false;
+  }
+
+  const numeric = Number(trimmed);
+  return Number.isFinite(numeric) && numeric > 0;
+}
+
+function getExpenseAmountError(value: string) {
+  if (!value.trim()) {
+    return "Enter an expense amount.";
+  }
+
+  if (!isValidExpenseAmount(value)) {
+    return "Enter a positive amount with up to two decimals. Exponents and + / - values are not allowed.";
+  }
+
+  return "";
+}
+
+function getNextActiveBuilderPhase(phases: FrontendJobPhase[]) {
+  return phases.find((phase) => !["Completed", "Cancelled"].includes(phase.status)) || phases[0] || null;
+}
+
+function formatExpenseJobOption(job: FrontendJob) {
+  if (job.schedule_type === "builder_slab") {
+    const nextPhase = getNextActiveBuilderPhase(job.phases);
+    return [
+      job.builder_name || job.name,
+      job.community ? `Community ${job.community}` : "",
+      job.lot_number ? `Lot ${job.lot_number}` : "",
+      nextPhase?.phase_label ? `Current phase: ${nextPhase.phase_label}` : job.name,
+    ].filter(Boolean).join(" / ");
+  }
+
+  return [
+    job.customer_name || job.name,
+    job.job_type || "Job",
+    formatPurchaseOrderDisplay(job.work_order_number),
+  ].filter(Boolean).join(" • ");
+}
+
+function getExpenseJobDisplay(job: FrontendJob | null | undefined) {
+  if (!job) {
+    return {
+      title: "Unknown job",
+      subtitle: "Linked job record is unavailable",
+    };
+  }
+
+  if (job.schedule_type === "builder_slab") {
+    const nextPhase = getNextActiveBuilderPhase(job.phases);
+    return {
+      title: [job.builder_name || job.name, job.community || "", job.lot_number ? `Lot ${job.lot_number}` : ""].filter(Boolean).join(" / "),
+      subtitle: nextPhase?.phase_label ? `Current phase: ${nextPhase.phase_label}` : (job.name || "Builder lot / job"),
+    };
+  }
+
+  return {
+    title: job.customer_name || job.name || "Residential job",
+    subtitle: [job.job_type || "", formatPurchaseOrderDisplay(job.work_order_number)].filter(Boolean).join(" • ") || "Residential job",
+  };
 }
 
 function hasOverviewSummaryData(summary: FinanceOverviewSummary | null) {
@@ -317,27 +463,332 @@ function AddPaymentModal({
   );
 }
 
+type ExpenseDraft = {
+  expenseDate: string;
+  category: ExpenseCategory | "";
+  vendor: string;
+  description: string;
+  amount: string;
+  paymentMethod: string;
+  jobId: string;
+  notes: string;
+  receiptUrl: string;
+};
+
+type ExpenseDraftErrors = Partial<Record<keyof ExpenseDraft | "general", string>>;
+
+type ExpenseJobOption = {
+  value: string;
+  label: string;
+};
+
+function getInitialExpenseDraft() {
+  return {
+    expenseDate: todayIso(),
+    category: "",
+    vendor: "",
+    description: "",
+    amount: "",
+    paymentMethod: "",
+    jobId: "",
+    notes: "",
+    receiptUrl: "",
+  } satisfies ExpenseDraft;
+}
+
+function InlineFieldError({ message }: { message?: string }) {
+  if (!message) return null;
+  return <div style={{ marginTop: 6, fontSize: ".76rem", color: "#A14B40", fontWeight: 600 }}>{message}</div>;
+}
+
+function ExpensesSummaryCards({ expenses }: { expenses: FinanceExpenseRecord[] }) {
+  const totalExpenses = expenses.reduce((sum, row) => sum + Number(row.amount || 0), 0);
+  const jobLinkedExpenses = expenses
+    .filter((row) => !!row.jobId)
+    .reduce((sum, row) => sum + Number(row.amount || 0), 0);
+  const generalOverhead = expenses
+    .filter((row) => !row.jobId)
+    .reduce((sum, row) => sum + Number(row.amount || 0), 0);
+
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 14 }}>
+      {[
+        { label: "Total Expenses", value: fmtMoney(totalExpenses), subtitle: "All loaded expense rows" },
+        { label: "Expense Count", value: String(expenses.length), subtitle: "Recorded expense entries" },
+        { label: "Job-Linked Expenses", value: fmtMoney(jobLinkedExpenses), subtitle: "Expenses tied to jobs" },
+        { label: "General Overhead", value: fmtMoney(generalOverhead), subtitle: "Expenses without a job link" },
+      ].map((card) => (
+        <div key={card.label} className="finance-kpi-card">
+          <div className="finance-kpi-label">{card.label}</div>
+          <div className="finance-kpi-value" style={{ marginTop: 10 }}>{card.value}</div>
+          <div className="finance-kpi-subtitle">{card.subtitle}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ExpensesList({
+  expenses,
+  jobsById,
+}: {
+  expenses: FinanceExpenseRecord[];
+  jobsById: Map<string, FrontendJob>;
+}) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      {expenses.map((row) => {
+        const linkedJob = row.jobId ? jobsById.get(row.jobId) : null;
+        const jobDisplay = row.jobId
+          ? getExpenseJobDisplay(linkedJob)
+          : { title: "General overhead", subtitle: "Not linked to a job" };
+
+        return (
+          <div
+            key={row.id}
+            style={{
+              border: "1px solid var(--admin-border)",
+              borderRadius: 14,
+              background: "var(--admin-card-bg)",
+              padding: 14,
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit,minmax(140px,1fr))",
+              gap: 12,
+            }}
+          >
+            {[
+              { label: "Expense Date", value: fmtDate(row.expenseDate) },
+              { label: "Category", value: getExpenseCategoryLabel(row.category) },
+              { label: "Vendor", value: row.vendor || EXPENSE_EMPTY_VALUE },
+              {
+                label: "Description",
+                value: row.description || EXPENSE_EMPTY_VALUE,
+                secondary: [toCompactText(row.notes), row.receiptUrl ? "Receipt attached" : ""].filter(Boolean).join(" • "),
+              },
+              {
+                label: "Job",
+                value: jobDisplay.title,
+                secondary: jobDisplay.subtitle,
+              },
+              { label: "Amount", value: fmtMoney(row.amount) },
+              { label: "Payment Method", value: formatPaymentMethodDisplay(row.paymentMethod) || EXPENSE_EMPTY_VALUE },
+            ].map((cell) => (
+              <div key={`${row.id}-${cell.label}`} style={{ minWidth: 0 }}>
+                <div style={{ fontSize: ".72rem", fontWeight: 700, color: "var(--admin-muted)", textTransform: "uppercase", letterSpacing: ".04em" }}>
+                  {cell.label}
+                </div>
+                <div style={{ marginTop: 6, fontWeight: 700, color: "var(--admin-text)", lineHeight: 1.35 }}>
+                  {cell.value}
+                </div>
+                {cell.secondary && (
+                  <div style={{ marginTop: 4, fontSize: ".78rem", color: "var(--admin-muted)", lineHeight: 1.4 }}>
+                    {cell.secondary}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function AddExpenseModal({
+  draft,
+  errors,
+  jobOptions,
+  jobsLoading,
+  onChange,
+  onClose,
+  onSave,
+}: {
+  draft: ExpenseDraft;
+  errors: ExpenseDraftErrors;
+  jobOptions: ExpenseJobOption[];
+  jobsLoading: boolean;
+  onChange: (field: keyof ExpenseDraft, value: string) => void;
+  onClose: () => void;
+  onSave: () => void;
+}) {
+  const amountError = errors.amount || "";
+  const saveDisabled = !draft.expenseDate
+    || !draft.category
+    || !draft.description.trim()
+    || !draft.amount;
+
+  return (
+    <div className="finance-modal-overlay" onClick={onClose}>
+      <div className="finance-modal-shell" onClick={(event) => event.stopPropagation()}>
+        <div className="finance-modal-header">
+          <div>
+            <div className="finance-modal-title">Add Expense</div>
+            <div className="finance-modal-subtitle">Record a live business expense with optional job linkage.</div>
+          </div>
+          <button className="finance-modal-close" onClick={onClose} aria-label="Close add expense modal">x</button>
+        </div>
+        <div className="finance-modal-body">
+          <div className="finance-payment-form-grid">
+            <div className="finance-payment-field">
+              <label style={labelStyle}>Expense Date</label>
+              <input type="date" value={draft.expenseDate} onChange={(event) => onChange("expenseDate", event.target.value)} className="finance-payment-input" />
+              <InlineFieldError message={errors.expenseDate} />
+            </div>
+            <div className="finance-payment-field">
+              <label style={labelStyle}>Category</label>
+              <select value={draft.category} onChange={(event) => onChange("category", event.target.value)} className="finance-select">
+                <option value="">Select a category</option>
+                {EXPENSE_CATEGORY_VALUES.map((category) => (
+                  <option key={category} value={category}>{getExpenseCategoryLabel(category)}</option>
+                ))}
+              </select>
+              <InlineFieldError message={errors.category} />
+            </div>
+            <div className="finance-payment-field finance-payment-field--full">
+              <label style={labelStyle}>Description</label>
+              <input value={draft.description} onChange={(event) => onChange("description", event.target.value)} className="finance-payment-input" />
+              <InlineFieldError message={errors.description} />
+            </div>
+            <div className="finance-payment-field">
+              <label style={labelStyle}>Amount</label>
+              <input type="text" inputMode="decimal" value={draft.amount} onChange={(event) => onChange("amount", event.target.value)} className="finance-payment-input" />
+              <InlineFieldError message={amountError} />
+            </div>
+            <div className="finance-payment-field">
+              <label style={labelStyle}>Vendor</label>
+              <input value={draft.vendor} onChange={(event) => onChange("vendor", event.target.value)} className="finance-payment-input" />
+            </div>
+            <div className="finance-payment-field">
+              <label style={labelStyle}>Payment Method</label>
+              <input value={draft.paymentMethod} onChange={(event) => onChange("paymentMethod", event.target.value)} className="finance-payment-input" />
+            </div>
+            <div className="finance-payment-field">
+              <label style={labelStyle}>Job</label>
+              <select value={draft.jobId} onChange={(event) => onChange("jobId", event.target.value)} className="finance-select" disabled={jobsLoading}>
+                <option value="">No job / General overhead</option>
+                {jobOptions.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+              {jobsLoading && <div style={{ marginTop: 6, fontSize: ".76rem", color: "var(--admin-muted)" }}>Loading job options...</div>}
+            </div>
+            <div className="finance-payment-field">
+              <label style={labelStyle}>Receipt URL</label>
+              <input value={draft.receiptUrl} onChange={(event) => onChange("receiptUrl", event.target.value)} className="finance-payment-input" />
+            </div>
+            <div className="finance-payment-field finance-payment-field--full">
+              <label style={labelStyle}>Notes</label>
+              <textarea value={draft.notes} onChange={(event) => onChange("notes", event.target.value)} className="finance-payment-textarea" rows={4} />
+            </div>
+          </div>
+          {errors.general && (
+            <div className="finance-modal-error">
+              <div>{errors.general}</div>
+            </div>
+          )}
+          <div className="finance-modal-actions">
+            <button className="oak-button oak-button--outline" style={{ minHeight: 42, padding: "8px 14px", borderRadius: 10, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }} onClick={onClose}>
+              Cancel
+            </button>
+            <button className="oak-button oak-button--primary" style={{ minHeight: 42, padding: "8px 14px", borderRadius: 10, fontWeight: 700, cursor: saveDisabled ? "not-allowed" : "pointer", fontFamily: "inherit", border: "none", opacity: saveDisabled ? 0.6 : 1 }} onClick={onSave} disabled={saveDisabled}>
+              Save Expense
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ExpensesView({
+  expenses,
+  jobsById,
+  jobsLoading,
+  isLoading,
+  loadError,
+  onRetry,
+  onOpenExpenseModal,
+}: {
+  expenses: FinanceExpenseRecord[];
+  jobsById: Map<string, FrontendJob>;
+  jobsLoading: boolean;
+  isLoading: boolean;
+  loadError: string | null;
+  onRetry: () => void;
+  onOpenExpenseModal: () => void;
+}) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          <div>
+            <div style={{ fontSize: "1.02rem", fontWeight: 800, color: "var(--admin-text)" }}>Expenses</div>
+            <div style={{ fontSize: ".8rem", color: "var(--admin-muted)", marginTop: 2 }}>All-time business expenses pulled live from Supabase.</div>
+          </div>
+          <button className="oak-button oak-button--primary" style={{ minHeight: 42, padding: "8px 14px", borderRadius: 10, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", border: "none" }} onClick={onOpenExpenseModal}>
+            <i className="ti ti-plus" style={{ marginRight: 6 }} aria-hidden="true" />
+            Add Expense
+          </button>
+        </div>
+        {!isLoading && !loadError && <ExpensesSummaryCards expenses={expenses} />}
+      </div>
+
+      {isLoading ? (
+        <SectionCard title="Loading Expenses" subtitle="Fetching live expenses from Supabase.">
+          <FinanceEmptyState message="Loading expense records..." />
+        </SectionCard>
+      ) : loadError ? (
+        <SectionCard
+          title="Unable to Load Expenses"
+          subtitle="The expense list could not be loaded."
+          action={(
+            <button className="oak-button oak-button--outline" style={{ minHeight: 36, padding: "6px 12px", borderRadius: 10, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }} onClick={onRetry}>
+              Retry
+            </button>
+          )}
+        >
+          <FinanceEmptyState message={loadError} />
+        </SectionCard>
+      ) : expenses.length === 0 ? (
+        <SectionCard title="Expense History" subtitle="All-time expenses from Supabase.">
+          <FinanceEmptyState message="No expenses recorded yet." />
+        </SectionCard>
+      ) : (
+        <SectionCard title="Expense History" subtitle={jobsLoading ? "All-time expenses from Supabase. Jobs are still loading for linked labels." : "All-time expenses from Supabase."}>
+          <ExpensesList expenses={expenses} jobsById={jobsById} />
+        </SectionCard>
+      )}
+    </div>
+  );
+}
+
 function FinanceHeaderCard({
   financeView,
   overdueWarningText,
+  canViewExpenses,
   onFinanceViewChange,
 }: {
   financeView: string;
   overdueWarningText: string;
+  canViewExpenses: boolean;
   onFinanceViewChange: (value: string) => void;
 }) {
   const [dateRange, setDateRange] = useState("May 1 - May 31, 2026");
   const [jobType, setJobType] = useState("All Job Types");
   const [customerType, setCustomerType] = useState("All Customers");
   const [status, setStatus] = useState("All Statuses");
-  const overviewFiltersDisabled = financeView === "overview";
+  const filtersDisabledReason = financeView === "overview"
+    ? OVERVIEW_FILTER_HELPER_TEXT
+    : financeView === "expenses"
+      ? EXPENSE_FILTER_HELPER_TEXT
+      : "";
 
   return (
     <div style={CARD}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "flex-start", flexWrap: "wrap", marginBottom: 16 }}>
         <div>
           <div style={{ fontSize: "1.12rem", fontWeight: 800, color: "var(--admin-text)" }}>Finance Dashboard</div>
-          <div style={{ fontSize: ".82rem", color: "var(--admin-muted)", marginTop: 4 }}>Track revenue, profitability, and payments across your business.</div>
+          <div style={{ fontSize: ".82rem", color: "var(--admin-muted)", marginTop: 4 }}>Track revenue, profitability, payments, and expenses across your business.</div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
           <div className="finance-warning-note">{overdueWarningText}</div>
@@ -355,8 +806,8 @@ function FinanceHeaderCard({
             value={dateRange}
             onChange={e => setDateRange(e.target.value)}
             className="finance-select"
-            disabled={overviewFiltersDisabled}
-            title={overviewFiltersDisabled ? OVERVIEW_FILTER_HELPER_TEXT : undefined}
+            disabled={!!filtersDisabledReason}
+            title={filtersDisabledReason || undefined}
           >
             <option>May 1 - May 31, 2026</option>
             <option>Apr 1 - Apr 30, 2026</option>
@@ -369,8 +820,8 @@ function FinanceHeaderCard({
             value={jobType}
             onChange={e => setJobType(e.target.value)}
             className="finance-select"
-            disabled={overviewFiltersDisabled}
-            title={overviewFiltersDisabled ? OVERVIEW_FILTER_HELPER_TEXT : undefined}
+            disabled={!!filtersDisabledReason}
+            title={filtersDisabledReason || undefined}
           >
             <option>All Job Types</option>
             <option>Driveways</option>
@@ -384,8 +835,8 @@ function FinanceHeaderCard({
             value={customerType}
             onChange={e => setCustomerType(e.target.value)}
             className="finance-select"
-            disabled={overviewFiltersDisabled}
-            title={overviewFiltersDisabled ? OVERVIEW_FILTER_HELPER_TEXT : undefined}
+            disabled={!!filtersDisabledReason}
+            title={filtersDisabledReason || undefined}
           >
             <option>All Customers</option>
             <option>Residential</option>
@@ -398,8 +849,8 @@ function FinanceHeaderCard({
             value={status}
             onChange={e => setStatus(e.target.value)}
             className="finance-select"
-            disabled={overviewFiltersDisabled}
-            title={overviewFiltersDisabled ? OVERVIEW_FILTER_HELPER_TEXT : undefined}
+            disabled={!!filtersDisabledReason}
+            title={filtersDisabledReason || undefined}
           >
             <option>All Statuses</option>
             <option>Past Due</option>
@@ -408,13 +859,14 @@ function FinanceHeaderCard({
           </select>
         </div>
       </div>
-      {overviewFiltersDisabled && <div style={{ marginTop: 10, fontSize: ".78rem", color: "var(--admin-muted)" }}>{OVERVIEW_FILTER_HELPER_TEXT}</div>}
+      {!!filtersDisabledReason && <div style={{ marginTop: 10, fontSize: ".78rem", color: "var(--admin-muted)" }}>{filtersDisabledReason}</div>}
 
       <div className="finance-tab-row">
         {[
           { id: "overview", label: "Overview" },
           { id: "revenue", label: "Revenue" },
           { id: "payments", label: "Payments" },
+          ...(canViewExpenses ? [{ id: "expenses", label: "Expenses" }] : []),
           { id: "reports", label: "Reports" },
         ].map(item => (
           <button
@@ -435,12 +887,22 @@ function FinanceHeaderCard({
   );
 }
 
-function OverviewKpiGrid({ summary }: { summary: FinanceOverviewSummary }) {
+function OverviewKpiGrid({
+  summary,
+  canViewExpenses,
+}: {
+  summary: FinanceOverviewSummary;
+  canViewExpenses: boolean;
+}) {
   const overviewKpis = [
     { id: "collected-revenue", label: "Collected Revenue", subtitle: "Payments received", value: summary.totalRevenue, icon: "ti-credit-card-pay" },
     { id: "outstanding-receivables", label: "Outstanding Receivables", subtitle: "Open invoice balances", value: summary.unpaidBalance, icon: "ti-alert-circle" },
-    { id: "total-expenses", label: "Total Expenses", subtitle: "Recorded business expenses", value: summary.totalExpenses, icon: "ti-receipt-2" },
-    { id: "net-profit", label: "Net Profit", subtitle: "Collected revenue minus expenses", value: summary.netProfit, icon: "ti-chart-bar" },
+    ...(canViewExpenses
+      ? [
+          { id: "total-expenses", label: "Total Expenses", subtitle: "Recorded business expenses", value: summary.totalExpenses, icon: "ti-receipt-2" },
+          { id: "net-profit", label: "Net Profit", subtitle: "Collected revenue minus expenses", value: summary.netProfit, icon: "ti-chart-bar" },
+        ]
+      : []),
   ];
 
   return (
@@ -779,26 +1241,53 @@ function ReportsView() {
 function FinanceDashboard({
   financeView,
   onFinanceViewChange,
+  appRole,
+  jobs,
+  jobsLoading,
 }: {
   financeView: string;
   onFinanceViewChange: (value: string) => void;
+  appRole: AppRole | null;
+  jobs: FrontendJob[];
+  jobsLoading: boolean;
 }) {
+  const canViewExpenses = isExpenseRole(appRole);
   const [receivablesState, setReceivablesState] = useState<FinanceReceivableRecord[]>([]);
   const [paymentsState, setPaymentsState] = useState<FinancePaymentRecord[]>([]);
+  const [expensesState, setExpensesState] = useState<FinanceExpenseRecord[]>([]);
   const [revenueItemsState, setRevenueItemsState] = useState(() => parseStoredArray(FINANCE_REVENUE_ITEMS_STORAGE_KEY, revenueItems));
   const [overviewSummary, setOverviewSummary] = useState<FinanceOverviewSummary | null>(null);
   const [paymentDraft, setPaymentDraft] = useState<any | null>(null);
+  const [expenseDraft, setExpenseDraft] = useState<ExpenseDraft | null>(null);
   const [paymentErrors, setPaymentErrors] = useState<string[]>([]);
+  const [expenseErrors, setExpenseErrors] = useState<ExpenseDraftErrors>({});
   const [financeLoading, setFinanceLoading] = useState(true);
   const [financeError, setFinanceError] = useState<string | null>(null);
+  const [expensesLoading, setExpensesLoading] = useState(false);
+  const [expensesError, setExpensesError] = useState<string | null>(null);
+  const [expensesInitialized, setExpensesInitialized] = useState(false);
   const [overviewLoading, setOverviewLoading] = useState(true);
   const [overviewError, setOverviewError] = useState<string | null>(null);
   const [paymentSaving, setPaymentSaving] = useState(false);
+  const [expenseSaving, setExpenseSaving] = useState(false);
   const overdueCount = useMemo(
     () => receivablesState.filter(item => isPastDue(item.dueDate, Number(item.balanceDue || 0), item.status)).length,
     [receivablesState]
   );
   const overdueWarningText = useMemo(() => getOverdueWarningText(overdueCount), [overdueCount]);
+  const jobsById = useMemo(
+    () => new Map(jobs.map((job) => [job.databaseId, job])),
+    [jobs]
+  );
+  const expenseJobOptions = useMemo(
+    () => [...jobs]
+      .map((job) => ({
+        value: job.databaseId,
+        label: formatExpenseJobOption(job),
+      }))
+      .sort((left, right) => left.label.localeCompare(right.label)),
+    [jobs]
+  );
   const receivableOptions = receivablesState
     .filter(item => Number(item.balanceDue || 0) > 0)
     .map(item => ({
@@ -820,6 +1309,16 @@ function FinanceDashboard({
     if (typeof window === "undefined") return;
     window.localStorage.setItem(FINANCE_REVENUE_ITEMS_STORAGE_KEY, JSON.stringify(revenueItemsState));
   }, [revenueItemsState]);
+
+  useEffect(() => {
+    if (!canViewExpenses) {
+      setExpenseDraft(null);
+      setExpenseErrors({});
+      if (financeView === "expenses") {
+        onFinanceViewChange("overview");
+      }
+    }
+  }, [canViewExpenses, financeView, onFinanceViewChange]);
 
   const refreshOverviewSummary = async () => {
     setOverviewLoading(true);
@@ -849,10 +1348,38 @@ function FinanceDashboard({
     }
   };
 
+  const refreshExpensesData = async () => {
+    if (!canViewExpenses) {
+      return;
+    }
+
+    setExpensesInitialized(true);
+    setExpensesLoading(true);
+    setExpensesError(null);
+
+    try {
+      const snapshot = await fetchFinanceExpensesSnapshot();
+      setExpensesState(snapshot.expenses);
+    } catch (error) {
+      setExpensesState([]);
+      setExpensesError(error instanceof Error ? error.message : "Unable to load expense data.");
+    } finally {
+      setExpensesLoading(false);
+    }
+  };
+
   useEffect(() => {
     void refreshPaymentsData();
     void refreshOverviewSummary();
   }, []);
+
+  useEffect(() => {
+    if (!canViewExpenses || financeView !== "expenses" || expensesInitialized) {
+      return;
+    }
+
+    void refreshExpensesData();
+  }, [canViewExpenses, financeView, expensesInitialized]);
 
   const openPaymentModal = (receivableKey = "") => {
     const selected = receivableOptions.find(item => item.key === receivableKey);
@@ -877,6 +1404,20 @@ function FinanceDashboard({
       }
       return { ...current, [field]: value };
     });
+  };
+
+  const openExpenseModal = () => {
+    setExpenseDraft(getInitialExpenseDraft());
+    setExpenseErrors({});
+  };
+
+  const handleExpenseDraftChange = (field: keyof ExpenseDraft, value: string) => {
+    setExpenseErrors((current) => ({
+      ...current,
+      [field]: field === "amount" ? getExpenseAmountError(value) : "",
+      general: "",
+    }));
+    setExpenseDraft((current) => current ? { ...current, [field]: value } : current);
   };
 
   const savePayment = async () => {
@@ -916,9 +1457,69 @@ function FinanceDashboard({
     }
   };
 
+  const saveExpense = async () => {
+    if (!expenseDraft) return;
+
+    const nextErrors: ExpenseDraftErrors = {};
+    const amountError = getExpenseAmountError(expenseDraft.amount);
+
+    if (!isValidDateInput(expenseDraft.expenseDate)) {
+      nextErrors.expenseDate = "Enter a valid expense date.";
+    }
+
+    if (!expenseDraft.category || !EXPENSE_CATEGORY_VALUES.includes(expenseDraft.category as ExpenseCategory)) {
+      nextErrors.category = "Select a valid expense category.";
+    }
+
+    if (!expenseDraft.description.trim()) {
+      nextErrors.description = "Enter an expense description.";
+    }
+
+    if (amountError) {
+      nextErrors.amount = amountError;
+    }
+
+    if (Object.keys(nextErrors).length > 0) {
+      setExpenseErrors(nextErrors);
+      return;
+    }
+
+    const amount = Number(expenseDraft.amount.trim());
+
+    const payload: CreateExpenseInput = {
+      jobId: expenseDraft.jobId || null,
+      expenseDate: expenseDraft.expenseDate,
+      category: expenseDraft.category as ExpenseCategory,
+      vendor: expenseDraft.vendor,
+      description: expenseDraft.description,
+      amount,
+      paymentMethod: expenseDraft.paymentMethod,
+      receiptUrl: expenseDraft.receiptUrl,
+      notes: expenseDraft.notes,
+    };
+
+    setExpenseSaving(true);
+
+    try {
+      await createExpense(payload);
+      setExpenseDraft(null);
+      setExpenseErrors({});
+      await Promise.all([
+        refreshExpensesData(),
+        refreshOverviewSummary(),
+      ]);
+    } catch (error) {
+      setExpenseErrors({
+        general: error instanceof Error ? error.message : "Unable to save expense.",
+      });
+    } finally {
+      setExpenseSaving(false);
+    }
+  };
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-      <FinanceHeaderCard financeView={financeView} overdueWarningText={overdueWarningText} onFinanceViewChange={onFinanceViewChange} />
+      <FinanceHeaderCard financeView={financeView} overdueWarningText={overdueWarningText} canViewExpenses={canViewExpenses} onFinanceViewChange={onFinanceViewChange} />
 
       {financeView === "overview" && (
         <>
@@ -939,7 +1540,7 @@ function FinanceDashboard({
               <FinanceEmptyState message={overviewError} />
             </SectionCard>
           ) : hasOverviewSummaryData(overviewSummary) ? (
-            <OverviewKpiGrid summary={overviewSummary as FinanceOverviewSummary} />
+            <OverviewKpiGrid summary={overviewSummary as FinanceOverviewSummary} canViewExpenses={canViewExpenses} />
           ) : (
             <SectionCard title="Overview Totals" subtitle="All-time finance totals from Supabase.">
               <FinanceEmptyState message="No collected payments, open receivables, or recorded expenses found yet." />
@@ -967,6 +1568,19 @@ function FinanceDashboard({
           onOpenPaymentModal={openPaymentModal}
         />
       )}
+      {financeView === "expenses" && canViewExpenses && (
+        <ExpensesView
+          expenses={expensesState}
+          jobsById={jobsById}
+          jobsLoading={jobsLoading}
+          isLoading={expensesLoading}
+          loadError={expensesError}
+          onRetry={() => {
+            void refreshExpensesData();
+          }}
+          onOpenExpenseModal={openExpenseModal}
+        />
+      )}
       {financeView === "reports" && <ReportsView />}
       {paymentDraft && (
         <AddPaymentModal
@@ -982,6 +1596,24 @@ function FinanceDashboard({
           onSave={() => {
             if (paymentSaving) return;
             void savePayment();
+          }}
+        />
+      )}
+      {expenseDraft && canViewExpenses && (
+        <AddExpenseModal
+          draft={expenseDraft}
+          errors={expenseErrors}
+          jobOptions={expenseJobOptions}
+          jobsLoading={jobsLoading}
+          onChange={handleExpenseDraftChange}
+          onClose={() => {
+            if (expenseSaving) return;
+            setExpenseDraft(null);
+            setExpenseErrors({});
+          }}
+          onSave={() => {
+            if (expenseSaving) return;
+            void saveExpense();
           }}
         />
       )}

@@ -679,10 +679,12 @@ function AdminSidebar({
   onLogout,
   sections = ADMIN_SECTIONS,
 }) {
+  const canViewFinanceExpenses = appRole === "owner" || appRole === "admin";
   const financeSubsections = [
     { id: "overview", label: "Overview" },
     { id: "revenue", label: "Revenue" },
     { id: "payments", label: "Payments" },
+    ...(canViewFinanceExpenses ? [{ id: "expenses", label: "Expenses" }] : []),
     { id: "reports", label: "Reports" },
   ];
   const navSections = sections.filter(item => item.id !== "settings");
@@ -3430,6 +3432,12 @@ export default function AdminWorkspace({
   const [financeView, setFinanceView] = useState("overview");
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
+  useEffect(() => {
+    if ((appRole === "office" || appRole === "field" || !appRole) && financeView === "expenses") {
+      setFinanceView("overview");
+    }
+  }, [appRole, financeView]);
+
   const selectedTicket = tickets.find(ticket => ticket.id === selectedTicketId) || null;
   const selectedCustomer = customers.find(customer => customer.id === selectedCustomerId) || null;
   const quickViewCustomer = customers.find(customer => customer.id === quickViewCustomerId) || null;
@@ -4932,7 +4940,7 @@ export default function AdminWorkspace({
     if (section === "customers") return <CustomersSection customers={customers} loading={customersLoading} error={customersError} tickets={tickets} jobs={jobs} onSelectCustomer={openQuickViewForCustomer} search={customerSearch} onSearchChange={setCustomerSearch} typeFilter={customerTypeFilter} onTypeFilterChange={setCustomerTypeFilter} statusFilter={customerStatusFilter} onStatusFilterChange={setCustomerStatusFilter} />;
     if (section === "crews") return <CrewsSection crews={crews} jobs={jobs} onCreateCrew={createCrew} onUpdateCrew={updateCrew} />;
     if (section === "builders") return <BuildersSection builders={builders} buildersLoading={buildersLoading} buildersError={buildersError} jobs={jobs} crews={crews} onCreateBuilderJob={openBuilderJobModal} onCreateBuilder={() => setBuilderRecordDraft({ name: "", contact: "", phone: "", communities: "" })} onOpenJob={jobId => setSelectedJobId(jobId)} />;
-    if (section === "finance") return <FinanceDashboard financeView={financeView} onFinanceViewChange={setFinanceView} />;
+    if (section === "finance") return <FinanceDashboard financeView={financeView} onFinanceViewChange={setFinanceView} appRole={appRole} jobs={jobs} jobsLoading={jobsLoading} />;
     return <SettingsSection settings={settings} onUpdateSettings={patch => setSettings(prev => ({ ...prev, ...patch }))} historyCounts={{ scheduleChanges: scheduleHistory.length, overrides: overrideHistory.length }} />;
   })();
 

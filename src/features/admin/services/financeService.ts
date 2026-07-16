@@ -31,6 +31,21 @@ interface PaymentRow {
   created_at: string;
 }
 
+interface ExpenseRow {
+  id: string;
+  job_id: string | null;
+  expense_date: string;
+  category: string | null;
+  vendor: string | null;
+  description: string | null;
+  amount: number | string;
+  payment_method: string | null;
+  receipt_url: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 interface FinanceOverviewSummaryRow {
   total_revenue: number | string | null;
   unpaid_balance: number | string | null;
@@ -49,6 +64,22 @@ interface JobLookupRow {
   id: string;
   job_name: string | null;
 }
+
+export const EXPENSE_CATEGORY_VALUES = [
+  "material",
+  "labor",
+  "fuel",
+  "equipment",
+  "subcontractor",
+  "dump_fee",
+  "office",
+  "software",
+  "insurance",
+  "general",
+  "other",
+] as const;
+
+export type ExpenseCategory = typeof EXPENSE_CATEGORY_VALUES[number];
 
 export interface FinanceReceivableRecord {
   invoiceId: string;
@@ -79,9 +110,28 @@ export interface FinancePaymentRecord {
   remainingBalance: number;
 }
 
+export interface FinanceExpenseRecord {
+  id: string;
+  jobId: string | null;
+  expenseDate: string;
+  category: ExpenseCategory;
+  vendor: string;
+  description: string;
+  amount: number;
+  paymentMethod: string;
+  receiptUrl: string;
+  notes: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface FinancePaymentsSnapshot {
   receivables: FinanceReceivableRecord[];
   payments: FinancePaymentRecord[];
+}
+
+export interface FinanceExpensesSnapshot {
+  expenses: FinanceExpenseRecord[];
 }
 
 export interface FinanceOverviewSummary {
@@ -97,6 +147,18 @@ export interface CreatePaymentInput {
   amount: number;
   paymentMethod: string;
   referenceNumber?: string;
+  notes?: string;
+}
+
+export interface CreateExpenseInput {
+  jobId?: string | null;
+  expenseDate: string;
+  category: ExpenseCategory;
+  vendor?: string;
+  description: string;
+  amount: number;
+  paymentMethod?: string;
+  receiptUrl?: string;
   notes?: string;
 }
 
@@ -152,6 +214,14 @@ function toStatusLabel(value: string | null | undefined) {
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
+}
+
+function isExpenseCategory(value: string | null | undefined): value is ExpenseCategory {
+  return EXPENSE_CATEGORY_VALUES.includes(String(value || "") as ExpenseCategory);
+}
+
+function toExpenseCategory(value: string | null | undefined): ExpenseCategory {
+  return isExpenseCategory(value) ? value : "other";
 }
 
 function formatCustomerName(customer: CustomerLookupRow | null | undefined) {
@@ -227,6 +297,20 @@ async function fetchPaymentRows() {
   }
 
   return (data || []) as PaymentRow[];
+}
+
+async function fetchExpenseRows() {
+  const { data, error } = await supabase
+    .from("expenses")
+    .select("id, job_id, expense_date, category, vendor, description, amount, payment_method, receipt_url, notes, created_at, updated_at")
+    .order("expense_date", { ascending: false })
+    .order("created_at", { ascending: false });
+
+  if (error) {
+    throwFinanceServiceError("Unable to load expenses", error);
+  }
+
+  return (data || []) as ExpenseRow[];
 }
 
 export async function fetchFinanceOverviewSummary(): Promise<FinanceOverviewSummary> {
@@ -340,6 +424,23 @@ function mapPayments(
   });
 }
 
+function mapExpenses(expenseRows: ExpenseRow[]) {
+  return expenseRows.map((row) => ({
+    id: row.id,
+    jobId: row.job_id,
+    expenseDate: row.expense_date,
+    category: toExpenseCategory(row.category),
+    vendor: row.vendor?.trim() || "",
+    description: row.description?.trim() || "",
+    amount: toMoney(row.amount),
+    paymentMethod: row.payment_method?.trim() || "",
+    receiptUrl: row.receipt_url?.trim() || "",
+    notes: row.notes?.trim() || "",
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  } satisfies FinanceExpenseRecord));
+}
+
 export async function fetchFinancePaymentsSnapshot(): Promise<FinancePaymentsSnapshot> {
   const summaryRows = await fetchReceivableSummaryRows();
 
@@ -358,6 +459,13 @@ export async function fetchFinancePaymentsSnapshot(): Promise<FinancePaymentsSna
   return { receivables, payments };
 }
 
+export async function fetchFinanceExpensesSnapshot(): Promise<FinanceExpensesSnapshot> {
+  const expenseRows = await fetchExpenseRows();
+  return {
+    expenses: mapExpenses(expenseRows),
+  };
+}
+
 export async function createPayment(input: CreatePaymentInput) {
   const { error } = await supabase
     .from("payments")
@@ -372,5 +480,25 @@ export async function createPayment(input: CreatePaymentInput) {
 
   if (error) {
     throwFinanceServiceError("Unable to save payment", error);
+  }
+}
+
+export async function createExpense(input: CreateExpenseInput) {
+  const { error } = await supabase
+    .from("expenses")
+    .insert({
+      job_id: input.jobId || null,
+      expense_date: input.expenseDate,
+      category: input.category,
+      vendor: input.vendor?.trim() || null,
+      description: input.description.trim(),
+      amount: input.amount,
+      payment_method: input.paymentMethod?.trim() || null,
+      receipt_url: input.receiptUrl?.trim() || null,
+      notes: input.notes?.trim() || null,
+    });
+
+  if (error) {
+    throwFinanceServiceError("Unable to save expense", error);
   }
 }

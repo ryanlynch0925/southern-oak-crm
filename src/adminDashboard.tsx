@@ -63,6 +63,57 @@ const SECTION_SUBTITLES = {
   settings: "Scheduling rules and planning settings",
 };
 
+function formatRoleLabel(role) {
+  switch (role) {
+    case "owner":
+      return "Owner";
+    case "admin":
+      return "Admin";
+    case "office":
+      return "Office";
+    case "field":
+      return "Field";
+    default:
+      return "";
+  }
+}
+
+function resolveAccountDisplayName(fullName, email) {
+  const normalizedFullName = String(fullName || "").trim();
+  if (normalizedFullName) {
+    return normalizedFullName;
+  }
+
+  const normalizedEmail = String(email || "").trim();
+  if (normalizedEmail) {
+    return normalizedEmail;
+  }
+
+  return "Signed-in user";
+}
+
+function buildInitials(fullName, email) {
+  const normalizedFullName = String(fullName || "").trim();
+  if (normalizedFullName) {
+    const words = normalizedFullName.split(/\s+/).filter(Boolean);
+    if (words.length === 1) {
+      return words[0].slice(0, 1).toUpperCase();
+    }
+
+    return `${words[0].slice(0, 1)}${words[words.length - 1].slice(0, 1)}`.toUpperCase();
+  }
+
+  const normalizedEmail = String(email || "").trim();
+  if (normalizedEmail) {
+    const emailPrefix = normalizedEmail.split("@")[0]?.trim() || "";
+    if (emailPrefix) {
+      return emailPrefix.slice(0, 1).toUpperCase();
+    }
+  }
+
+  return "U";
+}
+
 const ESTIMATE_STATUSES = [
   "New Request",
   "Needs Review",
@@ -575,13 +626,31 @@ function SidebarBrand() {
   );
 }
 
-function AdminSidebar({ section, setSection, financeView, setFinanceView, alerts, mobileOpen, onClose, sections = ADMIN_SECTIONS }) {
+function AdminSidebar({
+  section,
+  setSection,
+  financeView,
+  setFinanceView,
+  alerts,
+  mobileOpen,
+  onClose,
+  appRole,
+  profileFullName,
+  userEmail,
+  onLogout,
+  sections = ADMIN_SECTIONS,
+}) {
   const financeSubsections = [
     { id: "overview", label: "Overview" },
     { id: "revenue", label: "Revenue" },
     { id: "payments", label: "Payments" },
     { id: "reports", label: "Reports" },
   ];
+  const navSections = sections.filter(item => item.id !== "settings");
+  const hasSettingsAccess = sections.some(item => item.id === "settings");
+  const displayName = resolveAccountDisplayName(profileFullName, userEmail);
+  const roleLabel = formatRoleLabel(appRole);
+  const initials = buildInitials(profileFullName, userEmail);
   return (
     <>
       {mobileOpen && <button onClick={onClose} aria-label="Close navigation" style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.42)", border: "none", padding: 0, zIndex: 3090 }} />}
@@ -589,13 +658,14 @@ function AdminSidebar({ section, setSection, financeView, setFinanceView, alerts
         <div style={{ padding: 20, borderBottom: "1px solid rgba(243,232,208,.08)" }}>
           <SidebarBrand />
         </div>
-        <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 8 }}>
+        <div className="admin-sidebar-nav-shell">
+          <div className="admin-sidebar-nav">
           {alerts > 0 && (
             <div style={{ padding: "10px 12px", borderRadius: 10, background: "rgba(154,116,26,.12)", color: "var(--oak-tan)", fontSize: ".78rem", fontWeight: 700 }}>
               {alerts} jobs need attention
             </div>
           )}
-          {sections.map(item => {
+          {navSections.map(item => {
             const active = section === item.id;
             return (
               <div key={item.id} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -660,13 +730,48 @@ function AdminSidebar({ section, setSection, financeView, setFinanceView, alerts
               </div>
             );
           })}
+          </div>
+        </div>
+        <div className="admin-sidebar-footer">
+          <div className="admin-sidebar-account">
+            <div className="admin-sidebar-account-avatar" aria-hidden="true">{initials}</div>
+            <div className="admin-sidebar-account-copy">
+              <div className="admin-sidebar-account-name" title={displayName}>{displayName}</div>
+              <div className="admin-sidebar-account-role">{roleLabel}</div>
+            </div>
+          </div>
+          <div className="admin-sidebar-footer-separator" aria-hidden="true" />
+          <div className="admin-sidebar-footer-actions">
+            {hasSettingsAccess && (
+              <button
+                className={`admin-sidebar-footer-button${section === "settings" ? " is-active" : ""}`}
+                onClick={() => {
+                  setSection("settings");
+                  onClose();
+                }}
+              >
+                <i className="ti ti-settings" style={{ fontSize: 15 }} aria-hidden="true" />
+                <span>Settings</span>
+              </button>
+            )}
+            <button
+              className="admin-sidebar-footer-button admin-sidebar-footer-button--danger"
+              onClick={() => {
+                onClose();
+                onLogout();
+              }}
+            >
+              <i className="ti ti-logout" style={{ fontSize: 15 }} aria-hidden="true" />
+              <span>Sign Out</span>
+            </button>
+          </div>
         </div>
       </aside>
     </>
   );
 }
 
-function AdminTopBar({ section, financeView, onOpenMenu, onLogout, setPage, sections = ADMIN_SECTIONS }) {
+function AdminTopBar({ section, financeView, onOpenMenu, setPage, sections = ADMIN_SECTIONS }) {
   const title = section === "finance"
     ? `Finance${financeView !== "overview" ? ` / ${financeView[0].toUpperCase()}${financeView.slice(1)}` : ""}`
     : sections.find(item => item.id === section)?.label || "Dashboard";
@@ -686,10 +791,6 @@ function AdminTopBar({ section, financeView, onOpenMenu, onLogout, setPage, sect
           <button className="oak-button oak-button--outline" onClick={() => setPage("home")} style={{ minHeight: 42, padding: "8px 12px", borderRadius: 10, cursor: "pointer", fontWeight: 700, fontFamily: "inherit" }}>
             <i className="ti ti-world" style={{ marginRight: 6, fontSize: 13 }} aria-hidden="true" />
             View Site
-          </button>
-          <button className="oak-button oak-button--dark" onClick={onLogout} style={{ minHeight: 42, padding: "8px 12px", borderRadius: 10, cursor: "pointer", fontWeight: 700, fontFamily: "inherit", border: "none" }}>
-            <i className="ti ti-logout" style={{ marginRight: 6, fontSize: 13 }} aria-hidden="true" />
-            Sign Out
           </button>
         </div>
       </div>
@@ -2757,7 +2858,17 @@ function WarningModal({ state, onClose }) {
 const thStyle = { padding: "8px 10px", borderBottom: "1px solid var(--color-border-tertiary)" };
 const tdStyle = { padding: "10px", borderBottom: "1px solid #F1EEE7", fontSize: ".78rem", color: B.mid };
 
-export default function AdminWorkspace({ appRole, tickets, ticketsLoading = false, ticketsError = "", onUpdateTicket, onLogout, setPage }) {
+export default function AdminWorkspace({
+  appRole,
+  profileFullName = "",
+  userEmail = "",
+  tickets,
+  ticketsLoading = false,
+  ticketsError = "",
+  onUpdateTicket,
+  onLogout,
+  setPage,
+}) {
   const allowedSections = useMemo(() => getAllowedAdminSections(appRole), [appRole]);
   const defaultSection = getDefaultAdminSection(appRole);
   const [section, setSection] = useState(() => {
@@ -4232,6 +4343,10 @@ export default function AdminWorkspace({ appRole, tickets, ticketsLoading = fals
             alerts={jobsNeedingAttention}
             mobileOpen={mobileNavOpen}
             onClose={() => setMobileNavOpen(false)}
+            appRole={appRole}
+            profileFullName={profileFullName}
+            userEmail={userEmail}
+            onLogout={onLogout}
             sections={allowedSections}
           />
           <div className="admin-main-shell">
@@ -4239,7 +4354,6 @@ export default function AdminWorkspace({ appRole, tickets, ticketsLoading = fals
               section={section}
               financeView={financeView}
               onOpenMenu={() => setMobileNavOpen(true)}
-              onLogout={onLogout}
               setPage={setPage}
               sections={allowedSections}
             />

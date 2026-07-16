@@ -25,6 +25,7 @@ export default function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [appRole, setAppRole] = useState<AppRole | null>(null);
+  const [profileFullName, setProfileFullName] = useState("");
   const [roleLoading, setRoleLoading] = useState(false);
   const [roleError, setRoleError] = useState("");
   const sessionUserId = session?.user?.id || null;
@@ -75,6 +76,7 @@ export default function App() {
 
         if (event === "SIGNED_OUT") {
           setAppRole(null);
+          setProfileFullName("");
           setRoleError("");
           setRoleLoading(false);
         }
@@ -93,6 +95,7 @@ export default function App() {
     const loadRole = async () => {
       if (!sessionUserId) {
         setAppRole(null);
+        setProfileFullName("");
         setRoleError("");
         setRoleLoading(false);
         return;
@@ -103,7 +106,7 @@ export default function App() {
 
       const { data, error } = await supabase
         .from("profiles")
-        .select("role")
+        .select("role, full_name")
         .eq("id", sessionUserId)
         .maybeSingle();
 
@@ -112,6 +115,7 @@ export default function App() {
       if (error) {
         console.error("Unable to load admin role:", error);
         setAppRole(null);
+        setProfileFullName("");
         setRoleError("Unable to load account permissions.");
         setRoleLoading(false);
         return;
@@ -119,12 +123,14 @@ export default function App() {
 
       if (!isAppRole(data?.role)) {
         setAppRole(null);
+        setProfileFullName(typeof data?.full_name === "string" ? data.full_name : "");
         setRoleError("This account does not have an assigned Southern Oak role.");
         setRoleLoading(false);
         return;
       }
 
       setAppRole(data.role);
+      setProfileFullName(typeof data?.full_name === "string" ? data.full_name : "");
       setRoleLoading(false);
     };
 
@@ -155,6 +161,7 @@ export default function App() {
 
     setAdminMode(false);
     setAppRole(null);
+    setProfileFullName("");
     setRoleError("");
   };
 
@@ -242,6 +249,8 @@ export default function App() {
     return (
       <AdminWorkspace
         appRole={appRole}
+        profileFullName={profileFullName}
+        userEmail={session.user.email || ""}
         tickets={tickets}
         ticketsLoading={ticketsLoading}
         ticketsError={ticketsError}

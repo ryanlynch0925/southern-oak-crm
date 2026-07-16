@@ -138,9 +138,139 @@ a {
   position: sticky;
   top: 0;
   align-self: stretch;
-  min-height: 100%;
+  min-height: 100vh;
+  height: 100vh;
+  height: 100dvh;
+  max-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   border-right: 1px solid rgba(243, 232, 208, 0.08);
   z-index: 3100;
+}
+
+.admin-sidebar-nav-shell {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.admin-sidebar-nav {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.admin-sidebar-footer {
+  border-top: 1px solid rgba(243, 232, 208, 0.1);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: rgba(0, 0, 0, 0.08);
+  flex: 0 0 auto;
+}
+
+.admin-sidebar-account {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 2px 0;
+}
+
+.admin-sidebar-account-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(154, 116, 26, 0.18);
+  border: 1px solid rgba(243, 232, 208, 0.14);
+  color: var(--oak-cream);
+  font-size: 0.78rem;
+  font-weight: 800;
+  flex: 0 0 auto;
+}
+
+.admin-sidebar-account-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.admin-sidebar-account-name {
+  color: var(--oak-cream);
+  font-size: 0.88rem;
+  font-weight: 700;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.admin-sidebar-account-role {
+  color: rgba(243, 232, 208, 0.68);
+  font-size: 0.74rem;
+  font-weight: 600;
+  line-height: 1.15;
+}
+
+.admin-sidebar-footer-separator {
+  height: 1px;
+  width: 100%;
+  background: rgba(243, 232, 208, 0.1);
+}
+
+.admin-sidebar-footer-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.admin-sidebar-footer-button {
+  width: 100%;
+  min-height: 41px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(243, 232, 208, 0.08);
+  background: transparent;
+  color: rgba(243, 232, 208, 0.82);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 0.79rem;
+  font-weight: 700;
+  text-align: left;
+  transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease;
+  overflow: hidden;
+}
+
+.admin-sidebar-footer-button:hover,
+.admin-sidebar-footer-button:focus-visible {
+  background: rgba(243, 232, 208, 0.06);
+  border-color: rgba(243, 232, 208, 0.14);
+  color: var(--oak-cream);
+  outline: none;
+}
+
+.admin-sidebar-footer-button.is-active {
+  background: rgba(154, 116, 26, 0.14);
+  border-color: rgba(154, 116, 26, 0.3);
+  color: var(--oak-cream);
+}
+
+.admin-sidebar-footer-button--danger:hover,
+.admin-sidebar-footer-button--danger:focus-visible {
+  background: rgba(161, 75, 64, 0.18);
+  border-color: rgba(161, 75, 64, 0.26);
+  color: #f7d8d2;
 }
 
 .admin-main-shell {
@@ -1574,14 +1704,12 @@ a {
   }
 
   .admin-topbar-actions {
-    display: grid !important;
-    grid-template-columns: 1fr 1fr;
-    gap: 0.5rem;
+    display: flex !important;
     width: 100%;
   }
 
   .admin-topbar-actions .oak-button {
-    width: 100%;
+    width: auto;
     min-height: 44px;
     justify-content: center;
   }
@@ -1673,6 +1801,10 @@ a {
 
   .finance-payment-form-grid {
     grid-template-columns: 1fr;
+  }
+
+  .admin-sidebar-footer {
+    padding-bottom: max(16px, env(safe-area-inset-bottom));
   }
 
   .finance-modal-actions {

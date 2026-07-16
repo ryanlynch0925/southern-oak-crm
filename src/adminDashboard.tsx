@@ -1757,11 +1757,10 @@ function CalendarSection({
   );
 }
 
-function JobsSection({ jobs, loading = false, error = "", onSelectJob, onCreateBuilderJob, canCreateBuilderJob = true }) {
+function JobsSection({ jobs, crews = [], loading = false, error = "", onSelectJob, onCreateBuilderJob, canCreateBuilderJob = true }) {
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState("All");
   const [statusFilter, setStatusFilter] = useState("All");
-  const [isDesktopLayout, setIsDesktopLayout] = useState(() => typeof window === "undefined" ? true : window.innerWidth >= 1180);
   const filtered = jobs.filter(job => {
     if (typeFilter !== "All" && job.schedule_type !== typeFilter) return false;
     if (statusFilter !== "All" && job.status !== statusFilter) return false;
@@ -1771,32 +1770,40 @@ function JobsSection({ jobs, loading = false, error = "", onSelectJob, onCreateB
     }
     return true;
   });
-  const desktopColumns = "minmax(0,2.1fr) minmax(130px,1fr) minmax(110px,.95fr) minmax(150px,1.1fr) minmax(110px,.8fr) minmax(150px,.95fr) 120px";
-
-  useEffect(() => {
-    const handleResize = () => {
-      setIsDesktopLayout(window.innerWidth >= 1180);
-    };
-
-    window.addEventListener("resize", handleResize);
-    return () => window.removeEventListener("resize", handleResize);
-  }, []);
-
-  const getNextScheduledPhase = job => sortBuilderPhases(job.phases || []).find(phase => phase.scheduled_date && !["Completed", "Cancelled"].includes(phase.status)) || null;
-  const getTaskLabel = job => {
-    if (job.schedule_type === "residential") {
-      return job.scheduled_date ? "Scheduled Work" : "-";
-    }
-
-    return getNextScheduledPhase(job)?.phase_label || "-";
+  const getCurrentOperationalPhase = job => {
+    const phases = sortBuilderPhases(job.phases || []);
+    return phases.find(phase => !["Completed", "Cancelled"].includes(phase.status)) || phases[0] || null;
   };
-  const getScheduledLabel = job => {
+  const getCrewLabel = crewId => {
+    if (!crewId) return "Unassigned";
+    const crew = findCrewById(crews, crewId);
+    if (!crew) return "Unassigned";
+    return crew.name || `Crew ${getCrewNumber(crew) || "-"}`;
+  };
+  const getScheduledLabel = (job, currentPhase) => {
     if (job.schedule_type === "residential") {
-      return job.scheduled_date ? `${fmtDate(job.scheduled_date)} · ${job.scheduled_time || "-"}` : "-";
+      return job.scheduled_date ? `${fmtDate(job.scheduled_date)} · ${job.scheduled_time || "-"}` : "Not scheduled";
     }
 
-    const nextPhase = getNextScheduledPhase(job);
-    return nextPhase?.scheduled_date ? `${fmtDate(nextPhase.scheduled_date)} · ${nextPhase.scheduled_time || "-"}` : "-";
+    return currentPhase?.scheduled_date ? `${fmtDate(currentPhase.scheduled_date)} · ${currentPhase.scheduled_time || "-"}` : "Not scheduled";
+  };
+  const getReferenceMeta = (job, currentPhase) => (
+    job.schedule_type === "residential"
+      ? { label: "PO Number", value: job.work_order_number || "-" }
+      : { label: "Work Order", value: currentPhase?.work_order_number || job.work_order_number || "-" }
+  );
+  const getAttentionMeta = (job, currentPhase) => {
+    const isScheduled = job.schedule_type === "residential" ? !!job.scheduled_date : !!currentPhase?.scheduled_date;
+    if (job.status === "Delayed") {
+      return { tone: "delayed", note: "Delayed job requires follow-up." };
+    }
+    if (job.status === "Ready to Schedule") {
+      return { tone: "ready", note: "Ready to schedule." };
+    }
+    if (!isScheduled && !["Completed", "Cancelled"].includes(job.status)) {
+      return { tone: "unscheduled", note: "No scheduled date assigned." };
+    }
+    return { tone: "default", note: "" };
   };
 
   return (
@@ -1809,8 +1816,8 @@ function JobsSection({ jobs, loading = false, error = "", onSelectJob, onCreateB
           </div>
           {canCreateBuilderJob && <Btn v="green" onClick={onCreateBuilderJob}><i className="ti ti-plus" style={{ marginRight: 6 }} aria-hidden="true" />New Builder Job</Btn>}
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 10, marginTop: 12 }}>
-          <input style={INP} value={search} onChange={e => setSearch(e.target.value)} placeholder="Search jobs, communities, work orders..." />
+        <div className="jobs-filter-grid" style={{ display: "grid", gap: 10, marginTop: 12 }}>
+          <input style={INP} value={search} onChange={e => setSearch(e.target.value)} placeholder="Search jobs, communities, and references..." />
           <select value={typeFilter} onChange={e => setTypeFilter(e.target.value)} style={{ ...INP, cursor: "pointer" }}>
             <option value="All">All job types</option>
             <option value="residential">Residential</option>
@@ -1848,63 +1855,60 @@ function JobsSection({ jobs, loading = false, error = "", onSelectJob, onCreateB
         </Card>
       )}
 
-      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-        {!loading && !error && filtered.length > 0 && isDesktopLayout && (
-          <Card style={{ padding: "12px 16px" }}>
-            <div style={{ display: "grid", gridTemplateColumns: desktopColumns, gap: 12, alignItems: "center", paddingRight: 8 }}>
-              {["Job", "Job Type", "Task", "Date Scheduled", "Work Order", "Status", "Action"].map(label => (
-                <div key={label} style={{ fontSize: ".72rem", color: B.gray, fontWeight: 700, textTransform: "uppercase", letterSpacing: .5, textAlign: label === "Action" ? "right" : "left" }}>
-                  {label}
+      <div className="jobs-list">
+        {!loading && !error && filtered.map(job => {
+          const currentPhase = getCurrentOperationalPhase(job);
+          const reference = getReferenceMeta(job, currentPhase);
+          const attention = getAttentionMeta(job, currentPhase);
+          const scheduledLabel = getScheduledLabel(job, currentPhase);
+          const crewLabel = getCrewLabel(job.schedule_type === "residential" ? job.crew_id : currentPhase?.crew_id || job.crew_id);
+          const jobTypeLabel = job.schedule_type === "residential" ? job.job_type : (job.job_type || "Builder Slab Workflow");
+          const title = job.schedule_type === "residential"
+            ? (job.customer_name || job.name || "Residential Job")
+            : (job.lot_number ? `${job.builder_name} - Lot ${job.lot_number}` : (job.name || job.builder_name || "Builder Job"));
+          const subtitle = job.schedule_type === "residential"
+            ? (job.job_address || "-")
+            : ([job.community, job.job_address].filter(Boolean).join(" - ") || job.job_address || job.community || "-");
+
+          return (
+            <Card key={job.id} className={`jobs-row-card ${attention.tone !== "default" ? `jobs-row-card--${attention.tone}` : ""}`} style={{ padding: 18 }}>
+              <div className="jobs-row">
+                <div className="jobs-row__identity">
+                  <div className="jobs-row__type">{jobTypeLabel}</div>
+                  <div className="jobs-row__title">{title}</div>
+                  <div className="jobs-row__subtitle">{subtitle}</div>
                 </div>
-              ))}
-            </div>
-          </Card>
-        )}
-        {!loading && !error && filtered.map(job => (
-          <Card key={job.id} style={{ padding: 16 }}>
-            <div style={{ display: "grid", gridTemplateColumns: isDesktopLayout ? desktopColumns : "repeat(auto-fit,minmax(140px,1fr))", gap: 12, alignItems: "center", paddingRight: isDesktopLayout ? 8 : 0 }}>
-                <div style={{ minWidth: 0, gridColumn: isDesktopLayout ? "auto" : "span 2" }}>
-                  {!isDesktopLayout && <div style={{ fontSize: ".72rem", color: B.gray, marginBottom: 2 }}>Job</div>}
-                  <div style={{ fontWeight: 700, fontSize: ".92rem", color: B.dark }}>
-                    {job.schedule_type === "residential"
-                      ? job.customer_name
-                      : (job.lot_number ? `${job.builder_name} - Lot ${job.lot_number}` : (job.name || job.builder_name || "Builder Job"))}
+                <div className="jobs-row__ops">
+                  <div className="jobs-row__meta-grid">
+                    <div className="jobs-row__meta">
+                      <div className="jobs-row__meta-label">Scheduled</div>
+                      <div className="jobs-row__meta-value">{scheduledLabel}</div>
+                      {job.schedule_type === "builder_slab" && currentPhase?.phase_label && <div className="jobs-row__meta-subtitle">{currentPhase.phase_label}</div>}
+                    </div>
+                    <div className="jobs-row__meta">
+                      <div className="jobs-row__meta-label">Crew</div>
+                      <div className="jobs-row__meta-value">{crewLabel}</div>
+                    </div>
+                    <div className="jobs-row__meta">
+                      <div className="jobs-row__meta-label">{reference.label}</div>
+                      <div className="jobs-row__meta-value">{reference.value}</div>
+                    </div>
+                    <div className="jobs-row__meta jobs-row__meta--status">
+                      <div className="jobs-row__meta-label">Status</div>
+                      <div className="jobs-row__status">
+                        <Pill status={job.status} />
+                      </div>
+                    </div>
                   </div>
-                  <div style={{ fontSize: ".74rem", color: B.gray, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                    {job.schedule_type === "residential"
-                      ? job.job_address
-                      : [job.community, job.job_address].filter(Boolean).join(" - ") || job.job_address || job.community || "-"}
-                  </div>
+                  {attention.note && <div className="jobs-row__attention">{attention.note}</div>}
                 </div>
-                <div style={{ minWidth: 0 }}>
-                  {!isDesktopLayout && <div style={{ fontSize: ".72rem", color: B.gray, marginBottom: 2 }}>Job Type</div>}
-                  <div style={{ fontSize: ".82rem", fontWeight: 700, color: B.mid, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{job.schedule_type === "residential" ? job.job_type : "Builder Slab Workflow"}</div>
+                <div className="jobs-row__actions">
+                  <Btn sm v="outline" onClick={() => onSelectJob(job.id)}>Open Job</Btn>
                 </div>
-                <div style={{ minWidth: 0 }}>
-                  {!isDesktopLayout && <div style={{ fontSize: ".72rem", color: B.gray, marginBottom: 2 }}>Task</div>}
-                  <div style={{ fontSize: ".82rem", color: B.dark, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{getTaskLabel(job)}</div>
-                </div>
-                <div style={{ minWidth: 0 }}>
-                  {!isDesktopLayout && <div style={{ fontSize: ".72rem", color: B.gray, marginBottom: 2 }}>Date Scheduled</div>}
-                  <div style={{ fontSize: ".82rem", color: B.dark, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{getScheduledLabel(job)}</div>
-                </div>
-                <div style={{ minWidth: 0 }}>
-                  {!isDesktopLayout && <div style={{ fontSize: ".72rem", color: B.gray, marginBottom: 2 }}>Work Order</div>}
-                  <div style={{ fontSize: ".82rem", color: B.dark, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{job.work_order_number || "-"}</div>
-                </div>
-                <div style={{ minWidth: 0 }}>
-                  {!isDesktopLayout && <div style={{ fontSize: ".72rem", color: B.gray, marginBottom: 2 }}>Status</div>}
-                  <div style={{ minHeight: 28, display: "flex", alignItems: "center" }}>
-                    <Pill status={job.status} />
-                  </div>
-                </div>
-                <div style={{ minWidth: 0, justifySelf: "end", textAlign: "right" }}>
-                  {!isDesktopLayout && <div style={{ fontSize: ".72rem", color: B.gray, marginBottom: 2, textAlign: "right" }}>Action</div>}
-                  <Btn sm v="outline" onClick={() => onSelectJob(job.id)}>Open job</Btn>
-                </div>
-            </div>
-          </Card>
-        ))}
+              </div>
+            </Card>
+          );
+        })}
       </div>
     </>
   );
@@ -4924,10 +4928,10 @@ export default function AdminWorkspace({
     if (section === "dashboard") return <DashboardHomeSection tickets={tickets} jobs={jobs} events={allEvents} conflicts={activeConflicts} setSection={navigateToAdminSection} />;
     if (section === "tickets") return <EstimateTicketsSection tickets={tickets} ticketsLoading={ticketsLoading} ticketsError={ticketsError} onSelectTicket={ticket => setSelectedTicketId(ticket.id)} onAcceptTicket={ticket => applyTicketStatus(ticket, "Estimate Accepted", "Estimate accepted and ready for office scheduling.")} onScheduleTicket={openResidentialSchedule} jobs={jobs} scheduledEstimateDatabaseIds={scheduledEstimateDatabaseIds} />;
     if (section === "calendar") return <CalendarSection events={scheduleEvents} crews={crews} onOpenJob={jobId => setSelectedCalendarJobId(jobId)} pendingResidentialDraft={canManageSchedule ? residentialDraft : null} onPendingResidentialDraftChange={setResidentialDraft} onSavePendingResidentialSchedule={saveResidentialSchedule} onCancelPendingResidentialSchedule={() => { setResidentialDraft(null); setResidentialValidation(null); }} pendingBuilderSchedule={canManageSchedule ? builderScheduleDraft : null} onPendingBuilderScheduleChange={setBuilderScheduleDraft} onSavePendingBuilderSchedule={saveBuilderSchedule} onCancelPendingBuilderSchedule={() => { setBuilderScheduleDraft(null); setBuilderScheduleValidation(null); }} readOnly={calendarReadOnly} loading={scheduleLoading} error={scheduleError} residentialValidation={residentialValidation} onResidentialValidationReset={() => setResidentialValidation(null)} builderValidation={builderScheduleValidation} onBuilderValidationReset={() => setBuilderScheduleValidation(null)} />;
-    if (section === "jobs") return <JobsSection jobs={jobs} loading={jobsLoading} error={jobsError} onSelectJob={jobId => setSelectedJobId(jobId)} onCreateBuilderJob={openBuilderJobModal} canCreateBuilderJob={canManageSchedule} />;
+    if (section === "jobs") return <JobsSection jobs={jobs} crews={crews} loading={jobsLoading} error={jobsError} onSelectJob={jobId => setSelectedJobId(jobId)} onCreateBuilderJob={openBuilderJobModal} canCreateBuilderJob={canManageSchedule} />;
     if (section === "customers") return <CustomersSection customers={customers} loading={customersLoading} error={customersError} tickets={tickets} jobs={jobs} onSelectCustomer={openQuickViewForCustomer} search={customerSearch} onSearchChange={setCustomerSearch} typeFilter={customerTypeFilter} onTypeFilterChange={setCustomerTypeFilter} statusFilter={customerStatusFilter} onStatusFilterChange={setCustomerStatusFilter} />;
     if (section === "crews") return <CrewsSection crews={crews} jobs={jobs} onCreateCrew={createCrew} onUpdateCrew={updateCrew} />;
-    if (section === "builders") return <BuildersSection builders={builders} buildersLoading={buildersLoading} buildersError={buildersError} jobs={jobs} onCreateBuilderJob={openBuilderJobModal} onCreateBuilder={() => setBuilderRecordDraft({ name: "", contact: "", phone: "", communities: "" })} onOpenJob={jobId => setSelectedJobId(jobId)} />;
+    if (section === "builders") return <BuildersSection builders={builders} buildersLoading={buildersLoading} buildersError={buildersError} jobs={jobs} crews={crews} onCreateBuilderJob={openBuilderJobModal} onCreateBuilder={() => setBuilderRecordDraft({ name: "", contact: "", phone: "", communities: "" })} onOpenJob={jobId => setSelectedJobId(jobId)} />;
     if (section === "finance") return <FinanceDashboard financeView={financeView} onFinanceViewChange={setFinanceView} />;
     return <SettingsSection settings={settings} onUpdateSettings={patch => setSettings(prev => ({ ...prev, ...patch }))} historyCounts={{ scheduleChanges: scheduleHistory.length, overrides: overrideHistory.length }} />;
   })();

@@ -1,8 +1,17 @@
-﻿import { Btn, Card } from "../shared/AdminPrimitives";
+import { Btn, Card } from "../shared/AdminPrimitives";
 import { B } from "../shared/adminStyles";
 import { fmtDate } from "../shared/adminFormatters";
+import { findCrewById, getCrewNumber } from "../crews/crewUtils";
 import { sortBuilderPhases } from "./builderUtils";
-export default function BuildersSection({ builders, jobs, onCreateBuilderJob, onCreateBuilder, onOpenJob, buildersLoading = false, buildersError = "" }) {
+
+export default function BuildersSection({ builders, jobs, crews = [], onCreateBuilderJob, onCreateBuilder, onOpenJob, buildersLoading = false, buildersError = "" }) {
+  const getCrewLabel = crewId => {
+    if (!crewId) return "Unassigned";
+    const crew = findCrewById(crews, crewId);
+    if (!crew) return "Unassigned";
+    return crew.name || `Crew ${getCrewNumber(crew) || "-"}`;
+  };
+
   const builderSummaries = builders.map(builder => {
     const builderJobs = jobs.filter(job => (
       job.builder_id === builder.id
@@ -12,6 +21,7 @@ export default function BuildersSection({ builders, jobs, onCreateBuilderJob, on
     const nextPour = builderJobs.flatMap(job => sortBuilderPhases(job.phases || [])).find(phase => phase.phase_key === "pour_slab" && phase.scheduled_date);
     return { builder, builderJobs, openJobs, nextPour };
   });
+
   return (
     <>
       <Card style={{ marginBottom: 14 }}>
@@ -60,13 +70,31 @@ export default function BuildersSection({ builders, jobs, onCreateBuilderJob, on
             <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 10 }}>
               {builderJobs.length === 0 && <div style={{ fontSize: ".74rem", color: B.gray }}>No jobs yet.</div>}
               {builderJobs.map(job => (
-                <button key={job.id} onClick={() => onOpenJob(job.id)} style={{ textAlign: "left", background: B.sand, border: "1px solid var(--color-border-tertiary)", borderRadius: 6, padding: "8px 10px", cursor: "pointer", fontFamily: "inherit" }}>
-                  <div style={{ fontSize: ".76rem", fontWeight: 700, color: B.dark }}>
+                <button key={job.id} onClick={() => onOpenJob(job.id)} className="builder-current-job-button" style={{ textAlign: "left", background: B.sand, border: "1px solid var(--color-border-tertiary)", borderRadius: 6, padding: "10px 12px", cursor: "pointer", fontFamily: "inherit" }}>
+                  <div className="builder-current-job-title" style={{ fontSize: ".76rem", fontWeight: 700, color: B.dark }}>
                     {job.community || job.lot_number
                       ? `${job.community || job.builder_name} - ${job.lot_number ? `Lot ${job.lot_number}` : job.name}`
                       : job.name}
                   </div>
-                  <div style={{ fontSize: ".72rem", color: B.gray }}>{job.work_order_number || "No work order"} - {job.status}</div>
+                  <div className="builder-current-job-subtitle">{job.job_address || job.job_type || "Builder Slab"}</div>
+                  <div className="builder-current-job-meta-grid">
+                    <div className="builder-current-job-meta-item">
+                      <span className="builder-current-job-meta-label">Scheduled</span>
+                      <span className="builder-current-job-meta-value">{job.scheduled_date ? `${fmtDate(job.scheduled_date)} · ${job.scheduled_time || "-"}` : "Not scheduled"}</span>
+                    </div>
+                    <div className="builder-current-job-meta-item">
+                      <span className="builder-current-job-meta-label">Crew</span>
+                      <span className="builder-current-job-meta-value">{getCrewLabel(job.crew_id)}</span>
+                    </div>
+                    <div className="builder-current-job-meta-item">
+                      <span className="builder-current-job-meta-label">Work Order</span>
+                      <span className="builder-current-job-meta-value">{job.work_order_number || "-"}</span>
+                    </div>
+                    <div className="builder-current-job-meta-item">
+                      <span className="builder-current-job-meta-label">Status</span>
+                      <span className="builder-current-job-meta-value builder-current-job-meta-value--status">{job.status}</span>
+                    </div>
+                  </div>
                 </button>
               ))}
             </div>

@@ -17,6 +17,7 @@ import {
   calculateFinalEstimateRemainingAmount,
   formatFinalEstimateCalendarDate,
   getEffectiveFinalEstimateStatus,
+  getFinalEstimateExpirationInputValue,
 } from "../../estimates/finalEstimateTypes";
 import type { Ticket } from "../../tickets/ticketTypes";
 
@@ -298,6 +299,27 @@ export default function FinalEstimatePanel({
   const draft = sanitizeDraft(ticket.finalEstimateDraft || EMPTY_FINAL_ESTIMATE_DRAFT);
   const publications = ticket.finalEstimatePublications || [];
   const canRevoke = appRole === "owner" || appRole === "admin";
+  const acceptedPublication = publications.find((publication) => (
+    getEffectiveFinalEstimateStatus(publication.status, publication.expiresAt) === "accepted"
+    || publication.decision === "accepted"
+  )) || null;
+  const isAcceptedFinalEstimateLocked = acceptedPublication !== null;
+  const displayDraft = acceptedPublication
+    ? {
+      customerName: acceptedPublication.customerName,
+      customerEmail: acceptedPublication.customerEmail,
+      projectAddress: acceptedPublication.projectAddress,
+      projectType: acceptedPublication.projectType,
+      scopeDescription: acceptedPublication.scopeDescription,
+      totalAmount: acceptedPublication.totalAmount,
+      depositType: acceptedPublication.depositType,
+      depositValue: acceptedPublication.depositValue,
+      paymentTerms: acceptedPublication.paymentTerms,
+      schedulingTerms: acceptedPublication.schedulingTerms,
+      exclusions: acceptedPublication.exclusions,
+      expiresAt: getFinalEstimateExpirationInputValue(acceptedPublication.expiresAt),
+    }
+    : draft;
   const hasActivePublishedPublication = publications.some((publication) => (
     getEffectiveFinalEstimateStatus(publication.status, publication.expiresAt) === "published"
   ));
@@ -375,24 +397,28 @@ export default function FinalEstimatePanel({
     };
   }, [hasActivePublishedPublication]);
 
+  useEffect(() => {
+    if (isAcceptedFinalEstimateLocked) {
+      setShowPublishConfirm(false);
+    }
+  }, [isAcceptedFinalEstimateLocked]);
+
   const depositAmount = useMemo(() => (
     calculateFinalEstimateDepositAmount(
-      draft.totalAmount,
-      draft.depositType,
-      draft.depositValue
+      displayDraft.totalAmount,
+      displayDraft.depositType,
+      displayDraft.depositValue
     )
-  ), [draft.depositType, draft.depositValue, draft.totalAmount]);
+  ), [displayDraft.depositType, displayDraft.depositValue, displayDraft.totalAmount]);
 
   const remainingAmount = useMemo(() => (
     calculateFinalEstimateRemainingAmount(
-      draft.totalAmount,
+      displayDraft.totalAmount,
       depositAmount
     )
-  ), [depositAmount, draft.totalAmount]);
+  ), [depositAmount, displayDraft.totalAmount]);
 
-  const readyForInvoicePublication = useMemo(() => (
-    publications.find((publication) => getEffectiveFinalEstimateStatus(publication.status, publication.expiresAt) === "accepted") || null
-  ), [publications]);
+  const readyForInvoicePublication = acceptedPublication;
 
   const updateDraft = <K extends keyof FinalEstimateDraft>(
     key: K,
@@ -428,6 +454,12 @@ export default function FinalEstimatePanel({
   };
 
   const openPublishConfirmation = () => {
+    if (isAcceptedFinalEstimateLocked) {
+      setPublishError("This final estimate has already been accepted and is locked. Revisions require a future controlled revision or change-order workflow.");
+      setShowPublishConfirm(false);
+      return;
+    }
+
     const nextErrors = validateDraft(draft);
     setDraftErrors(nextErrors);
     setPublishError("");
@@ -445,6 +477,12 @@ export default function FinalEstimatePanel({
   const confirmPublish = async () => {
     if (!ticket.databaseId) {
       setPublishError("This estimate is missing its database ID and cannot be published yet.");
+      setShowPublishConfirm(false);
+      return;
+    }
+
+    if (isAcceptedFinalEstimateLocked) {
+      setPublishError("This final estimate has already been accepted and is locked. Revisions require a future controlled revision or change-order workflow.");
       setShowPublishConfirm(false);
       return;
     }
@@ -555,10 +593,12 @@ export default function FinalEstimatePanel({
             <i className="ti ti-refresh" style={{ marginRight: 5, fontSize: 12 }} aria-hidden="true" />
             {isRefreshing ? "Refreshing..." : "Refresh"}
           </Btn>
-          <Btn sm v="green" onClick={openPublishConfirmation} disabled={isPublishing}>
-            <i className="ti ti-lock-check" style={{ marginRight: 5, fontSize: 12 }} aria-hidden="true" />
-            Publish Final Estimate
-          </Btn>
+          {!isAcceptedFinalEstimateLocked && (
+            <Btn sm v="green" onClick={openPublishConfirmation} disabled={isPublishing}>
+              <i className="ti ti-lock-check" style={{ marginRight: 5, fontSize: 12 }} aria-hidden="true" />
+              Publish Final Estimate
+            </Btn>
+          )}
         </div>
       </div>
 
@@ -588,22 +628,43 @@ export default function FinalEstimatePanel({
         </div>
       )}
 
+      {isAcceptedFinalEstimateLocked && (
+        <div
+          style={{
+            borderRadius: 10,
+            padding: "12px 14px",
+            marginBottom: 16,
+            background: "#E6F3EA",
+            border: "1px solid #BED9C5",
+            color: "#25603C",
+          }}
+        >
+          <div style={{ fontSize: ".8rem", fontWeight: 700 }}>
+            Accepted Final Estimate — Locked
+          </div>
+          <div style={{ fontSize: ".76rem", lineHeight: 1.55, marginTop: 4 }}>
+            This estimate has been accepted. Revisions require a future controlled revision or change-order workflow.
+          </div>
+        </div>
+      )}
+
       <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 12 }}>
         <div>
           <label style={{ display: "block", fontSize: ".76rem", fontWeight: 700, color: B.dark, marginBottom: 4 }}>Customer Name *</label>
-          <input style={{ ...INP, borderColor: draftErrors.customerName ? "#922B21" : B.border }} value={draft.customerName} onChange={(event) => updateDraft("customerName", event.target.value)} />
+          <input style={{ ...INP, borderColor: draftErrors.customerName ? "#922B21" : B.border }} value={displayDraft.customerName} readOnly={isAcceptedFinalEstimateLocked} onChange={(event) => updateDraft("customerName", event.target.value)} />
           {draftErrors.customerName && <div style={{ marginTop: 5, fontSize: ".72rem", color: "#922B21" }}>{draftErrors.customerName}</div>}
         </div>
         <div>
           <label style={{ display: "block", fontSize: ".76rem", fontWeight: 700, color: B.dark, marginBottom: 4 }}>Customer Email</label>
-          <input style={{ ...INP, borderColor: draftErrors.customerEmail ? "#922B21" : B.border }} value={draft.customerEmail} onChange={(event) => updateDraft("customerEmail", event.target.value)} />
+          <input style={{ ...INP, borderColor: draftErrors.customerEmail ? "#922B21" : B.border }} value={displayDraft.customerEmail} readOnly={isAcceptedFinalEstimateLocked} onChange={(event) => updateDraft("customerEmail", event.target.value)} />
           {draftErrors.customerEmail && <div style={{ marginTop: 5, fontSize: ".72rem", color: "#922B21" }}>{draftErrors.customerEmail}</div>}
         </div>
         <div>
           <label style={{ display: "block", fontSize: ".76rem", fontWeight: 700, color: B.dark, marginBottom: 4 }}>Project Address</label>
           <input
             style={INP}
-            value={draft.projectAddress}
+            value={displayDraft.projectAddress}
+            readOnly={isAcceptedFinalEstimateLocked}
             onChange={(event) => {
               projectAddressDirtyRef.current = true;
               updateDraft("projectAddress", event.target.value);
@@ -612,13 +673,14 @@ export default function FinalEstimatePanel({
         </div>
         <div>
           <label style={{ display: "block", fontSize: ".76rem", fontWeight: 700, color: B.dark, marginBottom: 4 }}>Project Type</label>
-          <input style={INP} value={draft.projectType} onChange={(event) => updateDraft("projectType", event.target.value)} />
+          <input style={INP} value={displayDraft.projectType} readOnly={isAcceptedFinalEstimateLocked} onChange={(event) => updateDraft("projectType", event.target.value)} />
         </div>
         <div style={{ gridColumn: "1 / -1" }}>
           <label style={{ display: "block", fontSize: ".76rem", fontWeight: 700, color: B.dark, marginBottom: 4 }}>Scope Description *</label>
           <textarea
             style={{ ...INP, minHeight: 110, resize: "vertical", borderColor: draftErrors.scopeDescription ? "#922B21" : B.border }}
-            value={draft.scopeDescription}
+            value={displayDraft.scopeDescription}
+            readOnly={isAcceptedFinalEstimateLocked}
             onChange={(event) => updateDraft("scopeDescription", event.target.value)}
           />
           {draftErrors.scopeDescription && <div style={{ marginTop: 5, fontSize: ".72rem", color: "#922B21" }}>{draftErrors.scopeDescription}</div>}
@@ -630,7 +692,8 @@ export default function FinalEstimatePanel({
             min="0"
             step="0.01"
             style={{ ...INP, borderColor: draftErrors.totalAmount ? "#922B21" : B.border }}
-            value={draft.totalAmount ?? ""}
+            value={displayDraft.totalAmount ?? ""}
+            readOnly={isAcceptedFinalEstimateLocked}
             onChange={(event) => updateDraft("totalAmount", event.target.value === "" ? null : Number(event.target.value))}
           />
           {draftErrors.totalAmount && <div style={{ marginTop: 5, fontSize: ".72rem", color: "#922B21" }}>{draftErrors.totalAmount}</div>}
@@ -640,7 +703,8 @@ export default function FinalEstimatePanel({
           <input
             type="date"
             style={{ ...INP, borderColor: draftErrors.expiresAt ? "#922B21" : B.border }}
-            value={draft.expiresAt}
+            value={displayDraft.expiresAt}
+            disabled={isAcceptedFinalEstimateLocked}
             onChange={(event) => updateDraft("expiresAt", event.target.value)}
           />
           {draftErrors.expiresAt && <div style={{ marginTop: 5, fontSize: ".72rem", color: "#922B21" }}>{draftErrors.expiresAt}</div>}
@@ -649,7 +713,8 @@ export default function FinalEstimatePanel({
           <label style={{ display: "block", fontSize: ".76rem", fontWeight: 700, color: B.dark, marginBottom: 4 }}>Deposit Type *</label>
           <select
             style={{ ...INP, borderColor: draftErrors.depositType ? "#922B21" : B.border }}
-            value={draft.depositType}
+            value={displayDraft.depositType}
+            disabled={isAcceptedFinalEstimateLocked}
             onChange={(event) => updateDraft("depositType", event.target.value as FinalEstimateDraft["depositType"])}
           >
             <option value="none">None</option>
@@ -660,15 +725,15 @@ export default function FinalEstimatePanel({
         </div>
         <div>
           <label style={{ display: "block", fontSize: ".76rem", fontWeight: 700, color: B.dark, marginBottom: 4 }}>
-            Deposit Value {draft.depositType === "percentage" ? "(%)" : draft.depositType === "fixed" ? "($)" : ""}
+            Deposit Value {displayDraft.depositType === "percentage" ? "(%)" : displayDraft.depositType === "fixed" ? "($)" : ""}
           </label>
           <input
             type="number"
             min="0"
             step="0.01"
-            disabled={draft.depositType === "none"}
-            style={{ ...INP, borderColor: draftErrors.depositValue ? "#922B21" : B.border, opacity: draft.depositType === "none" ? 0.6 : 1 }}
-            value={draft.depositType === "none" ? "" : draft.depositValue ?? ""}
+            disabled={displayDraft.depositType === "none" || isAcceptedFinalEstimateLocked}
+            style={{ ...INP, borderColor: draftErrors.depositValue ? "#922B21" : B.border, opacity: displayDraft.depositType === "none" || isAcceptedFinalEstimateLocked ? 0.6 : 1 }}
+            value={displayDraft.depositType === "none" ? "" : displayDraft.depositValue ?? ""}
             onChange={(event) => updateDraft("depositValue", event.target.value === "" ? null : Number(event.target.value))}
           />
           {draftErrors.depositValue && <div style={{ marginTop: 5, fontSize: ".72rem", color: "#922B21" }}>{draftErrors.depositValue}</div>}
@@ -677,25 +742,26 @@ export default function FinalEstimatePanel({
           <label style={{ display: "block", fontSize: ".76rem", fontWeight: 700, color: B.dark, marginBottom: 4 }}>Payment Terms *</label>
           <textarea
             style={{ ...INP, minHeight: 90, resize: "vertical", borderColor: draftErrors.paymentTerms ? "#922B21" : B.border }}
-            value={draft.paymentTerms}
+            value={displayDraft.paymentTerms}
+            readOnly={isAcceptedFinalEstimateLocked}
             onChange={(event) => updateDraft("paymentTerms", event.target.value)}
           />
           {draftErrors.paymentTerms && <div style={{ marginTop: 5, fontSize: ".72rem", color: "#922B21" }}>{draftErrors.paymentTerms}</div>}
         </div>
         <div style={{ gridColumn: "1 / -1" }}>
           <label style={{ display: "block", fontSize: ".76rem", fontWeight: 700, color: B.dark, marginBottom: 4 }}>Scheduling Terms</label>
-          <textarea style={{ ...INP, minHeight: 80, resize: "vertical" }} value={draft.schedulingTerms} onChange={(event) => updateDraft("schedulingTerms", event.target.value)} />
+          <textarea style={{ ...INP, minHeight: 80, resize: "vertical" }} value={displayDraft.schedulingTerms} readOnly={isAcceptedFinalEstimateLocked} onChange={(event) => updateDraft("schedulingTerms", event.target.value)} />
         </div>
         <div style={{ gridColumn: "1 / -1" }}>
           <label style={{ display: "block", fontSize: ".76rem", fontWeight: 700, color: B.dark, marginBottom: 4 }}>Exclusions</label>
-          <textarea style={{ ...INP, minHeight: 80, resize: "vertical" }} value={draft.exclusions} onChange={(event) => updateDraft("exclusions", event.target.value)} />
+          <textarea style={{ ...INP, minHeight: 80, resize: "vertical" }} value={displayDraft.exclusions} readOnly={isAcceptedFinalEstimateLocked} onChange={(event) => updateDraft("exclusions", event.target.value)} />
         </div>
       </div>
 
       <div style={{ marginTop: 18, borderTop: `1px solid ${B.border}`, paddingTop: 16, display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 12 }}>
         <div style={{ background: B.sandD, borderRadius: 10, padding: "12px 14px" }}>
           <div style={{ fontSize: ".72rem", color: B.gray, marginBottom: 4 }}>Final Total</div>
-          <div style={{ fontSize: "1.04rem", fontWeight: 700, color: B.dark }}>{fmtMoney(draft.totalAmount)}</div>
+          <div style={{ fontSize: "1.04rem", fontWeight: 700, color: B.dark }}>{fmtMoney(displayDraft.totalAmount)}</div>
         </div>
         <div style={{ background: B.sandD, borderRadius: 10, padding: "12px 14px" }}>
           <div style={{ fontSize: ".72rem", color: B.gray, marginBottom: 4 }}>Deposit Required</div>

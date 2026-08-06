@@ -15,6 +15,7 @@ import type {
 import {
   calculateFinalEstimateDepositAmount,
   calculateFinalEstimateRemainingAmount,
+  formatFinalEstimateCalendarDate,
   getEffectiveFinalEstimateStatus,
 } from "../../estimates/finalEstimateTypes";
 import type { Ticket } from "../../tickets/ticketTypes";
@@ -61,14 +62,7 @@ function fmtDate(value: string) {
     return "-";
   }
 
-  const date = new Date(value);
-  return Number.isNaN(date.getTime())
-    ? value
-    : date.toLocaleDateString("en-US", {
-        month: "short",
-        day: "numeric",
-        year: "numeric",
-      });
+  return formatFinalEstimateCalendarDate(value) || value;
 }
 
 function getStatusTone(publication: FinalEstimatePublicationSummary) {

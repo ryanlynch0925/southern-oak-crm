@@ -10,6 +10,7 @@ import type {
 } from "./finalEstimateTypes";
 import {
   calculateFinalEstimateRemainingAmount,
+  formatFinalEstimateCalendarDate,
   getEffectiveFinalEstimateStatus,
 } from "./finalEstimateTypes";
 import { B } from "../../theme";
@@ -42,14 +43,11 @@ function fmtDate(value: string) {
     return "";
   }
 
-  const date = new Date(value);
-  return Number.isNaN(date.getTime())
-    ? value
-    : date.toLocaleDateString("en-US", {
-        month: "long",
-        day: "numeric",
-        year: "numeric",
-      });
+  return formatFinalEstimateCalendarDate(value, {
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  }) || value;
 }
 
 function getInitialForm(email = ""): SubmitFinalEstimateDecisionInput {

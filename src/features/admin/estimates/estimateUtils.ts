@@ -6,6 +6,7 @@ import type {
 } from "../../estimates/finalEstimateTypes";
 import { ACTIVE_SITE_VISIT_DATABASE_STATUSES } from "../calendar/calendarTypes";
 import {
+  getFinalEstimateExpirationInputValue,
   normalizeFinalEstimateDepositType,
   toNullableCurrencyNumber,
 } from "../../estimates/finalEstimateTypes";
@@ -619,7 +620,7 @@ function mapFinalEstimateDraft(
     paymentTerms: normalizeText(estimate.final_estimate_payment_terms),
     schedulingTerms: normalizeText(estimate.final_estimate_scheduling_terms),
     exclusions: normalizeText(estimate.final_estimate_exclusions),
-    expiresAt: normalizeText(estimate.final_estimate_expires_at).slice(0, 10),
+    expiresAt: getFinalEstimateExpirationInputValue(estimate.final_estimate_expires_at),
   };
 }
 

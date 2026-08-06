@@ -177,6 +177,10 @@ const ESTIMATE_STATUSES = [
   "Lost",
 ];
 
+const SELECTABLE_ESTIMATE_STATUSES = ESTIMATE_STATUSES.filter(
+  status => status !== "Estimate Accepted"
+);
+
 const JOB_STATUSES = [
   "Estimate Accepted",
   "Ready to Schedule",
@@ -1035,7 +1039,7 @@ function SummaryCards({ tickets, jobs, events, conflicts }) {
   );
 }
 
-function EstimateTicketsSection({ tickets, ticketsLoading = false, ticketsError = "", onSelectTicket, onAcceptTicket, onScheduleTicket, jobs, scheduledEstimateDatabaseIds = new Set() }) {
+function EstimateTicketsSection({ tickets, ticketsLoading = false, ticketsError = "", onSelectTicket, onScheduleTicket, jobs, scheduledEstimateDatabaseIds = new Set() }) {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("All");
   const [decisionFilter, setDecisionFilter] = useState("All");
@@ -1061,7 +1065,7 @@ function EstimateTicketsSection({ tickets, ticketsLoading = false, ticketsError 
         <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
           <div>
             <h1 style={{ fontSize: "1.25rem", fontWeight: 700, color: B.dark, marginBottom: 4 }}>Estimate Tickets</h1>
-            <p style={{ fontSize: ".8rem", color: B.gray }}>Keep the current estimate queue moving, accept estimates, and convert approved work into scheduled jobs.</p>
+            <p style={{ fontSize: ".8rem", color: B.gray }}>Keep the current estimate queue moving, monitor customer decisions, and convert approved work into scheduled jobs.</p>
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} style={{ ...INP, width: "auto", cursor: "pointer" }}>
@@ -1117,7 +1121,6 @@ function EstimateTicketsSection({ tickets, ticketsLoading = false, ticketsError 
           const isScheduled = scheduledTicketIds.has(ticket.id) || (!!ticket.databaseId && scheduledEstimateDatabaseIds.has(ticket.databaseId));
           const decision = getDecisionCategory(ticket);
           const latestNotification = getLatestNotification(ticket);
-          const canAcceptEstimate = decision === "pending" && !["Estimate Accepted", "Ready to Schedule", "Site Visit Scheduled", "Won", "Lost", "Declined"].includes(ticket.status);
           return (
             <Card key={ticket.id} className="estimate-ticket-card">
               <div className="estimate-ticket-row">
@@ -1151,11 +1154,6 @@ function EstimateTicketsSection({ tickets, ticketsLoading = false, ticketsError 
                   <div className="estimate-ticket-label">Status / Actions</div>
                   <div className="estimate-ticket-actions">
                     <Pill status={ticket.status} />
-                    {canAcceptEstimate && (
-                      <Btn sm v="green" onClick={() => onAcceptTicket(ticket)}>
-                        <i className="ti ti-check" style={{ marginRight: 5, fontSize: 12 }} aria-hidden="true" />Accept Estimate
-                      </Btn>
-                    )}
                     {["Estimate Accepted", "Ready to Schedule"].includes(ticket.status) && !isScheduled && (
                       <Btn sm v="dark" onClick={() => onScheduleTicket(ticket)}>
                         <i className="ti ti-calendar-event" style={{ marginRight: 5, fontSize: 12 }} aria-hidden="true" />Schedule Job
@@ -1232,7 +1230,7 @@ function TicketDetailView({
     && !siteVisitAppointment;
   const showViewSiteVisitAction = !!siteVisitAppointment;
   const canScheduleJob = ["Estimate Accepted", "Ready to Schedule"].includes(t.status);
-  const canAcceptEstimate = decision === "pending" && !["Estimate Accepted", "Ready to Schedule", "Site Visit Scheduled", "Won", "Lost", "Declined"].includes(t.status);
+  const isSystemAcceptedStatus = t.status === "Estimate Accepted";
   const isQuickActionRunning = quickActionPending !== "" || siteVisitSaving;
   const isMutationRunning = saving || isQuickActionRunning;
 
@@ -1433,18 +1431,18 @@ function TicketDetailView({
       return;
     }
 
+    if (status === "Estimate Accepted" || isSystemAcceptedStatus) {
+      return;
+    }
+
     const entry = buildStatusHistoryEntry(status, "Status updated in admin dashboard");
     setQuickActionSuccess("");
     setT((prev) => {
       const nextTicket = buildTicketWithStatus(prev, status, entry);
       return {
         ...nextTicket,
-        workflowStatus: status === "Estimate Accepted"
-          ? "estimate_accepted"
-          : nextTicket.workflowStatus,
-        customerStatus: status === "Estimate Accepted"
-          ? "accepted"
-          : prev.customerStatus ?? null,
+        workflowStatus: nextTicket.workflowStatus,
+        customerStatus: prev.customerStatus ?? null,
       };
     });
   };
@@ -1462,17 +1460,17 @@ function TicketDetailView({
     workflowStatus?: string;
     customerStatus?: string | null;
   }) => {
+    if (status === "Estimate Accepted") {
+      return;
+    }
+
     const requestId = beginMutationRequest();
     if (requestId == null) {
       return;
     }
 
     const entry = buildStatusHistoryEntry(status, historyNote);
-    const resolvedCustomerStatus = customerStatus ?? (
-      status === "Estimate Accepted"
-        ? "accepted"
-        : t.customerStatus ?? null
-    );
+    const resolvedCustomerStatus = customerStatus ?? t.customerStatus ?? null;
     const updatedTicket = {
       ...buildTicketWithStatus(t, status, entry),
       workflowStatus: workflowStatus || mapTicketStatusToWorkflowStatus(status, t.workflowStatus || "new_request"),
@@ -1497,10 +1495,6 @@ function TicketDetailView({
 
       setT(nextTicket);
       setQuickActionSuccess(successMessage);
-
-      if (status === "Estimate Accepted") {
-        void onRefreshJobs();
-      }
     } catch (error) {
       if (!isCurrentMutationRequest(requestId)) {
         return;
@@ -1699,26 +1693,6 @@ function TicketDetailView({
             <Card>
               <h3 style={{ fontSize: ".82rem", fontWeight: 700, color: B.dark, textTransform: "uppercase", letterSpacing: .5, marginBottom: 12 }}><i className="ti ti-bolt" style={{ marginRight: 6, color: B.bronze }} aria-hidden="true" />Quick Actions</h3>
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                {canAcceptEstimate && (
-                  <Btn
-                    full
-                    sm
-                    v="green"
-                    onClick={() => {
-                      void runQuickAction({
-                        status: "Estimate Accepted",
-                        note: "Estimate accepted and ready for office scheduling.",
-                        successMessage: "Estimate moved to Estimate Accepted.",
-                        workflowStatus: "estimate_accepted",
-                        customerStatus: "accepted",
-                      });
-                    }}
-                    disabled={isMutationRunning}
-                  >
-                    <i className="ti ti-check" style={{ marginRight: 5, fontSize: 13 }} aria-hidden="true" />
-                    {quickActionPending === "Estimate Accepted" ? "Updating..." : "Accept Estimate"}
-                  </Btn>
-                )}
                 {showMoveToSiteVisitAction && (
                   <Btn
                     full
@@ -1754,7 +1728,7 @@ function TicketDetailView({
                     <i className="ti ti-calendar-event" style={{ marginRight: 5, fontSize: 13 }} aria-hidden="true" />Schedule Job
                   </Btn>
                 )}
-                {!canAcceptEstimate && !showMoveToSiteVisitAction && !showScheduleSiteVisitAction && !showViewSiteVisitAction && !canScheduleJob && (
+                {!showMoveToSiteVisitAction && !showScheduleSiteVisitAction && !showViewSiteVisitAction && !canScheduleJob && (
                   <div style={{ fontSize: ".76rem", color: B.gray, lineHeight: 1.5 }}>This lead is best handled through follow-up and status updates before scheduling work.</div>
                 )}
                 <Btn full sm v="outline" onClick={save} disabled={isMutationRunning}>
@@ -1799,12 +1773,19 @@ function TicketDetailView({
             <Card>
               <h3 style={{ fontSize: ".82rem", fontWeight: 700, color: B.dark, textTransform: "uppercase", letterSpacing: .5, marginBottom: 12 }}><i className="ti ti-tag" style={{ marginRight: 6, color: B.bronze }} aria-hidden="true" />Status</h3>
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                {ESTIMATE_STATUSES.map(status => (
-                  <button key={status} onClick={() => changeStatus(status)} disabled={isMutationRunning} style={{ padding: "8px 12px", borderRadius: 6, border: `1.5px solid ${t.status === status ? B.green : B.border}`, background: t.status === status ? "#deeade" : B.white, color: t.status === status ? B.green : B.mid, fontWeight: t.status === status ? 700 : 500, fontSize: ".76rem", cursor: isMutationRunning ? "not-allowed" : "pointer", fontFamily: "inherit", textAlign: "left", display: "flex", alignItems: "center", justifyContent: "space-between", opacity: isMutationRunning ? 0.7 : 1 }}>
+                {SELECTABLE_ESTIMATE_STATUSES.map(status => (
+                  <button key={status} onClick={() => changeStatus(status)} disabled={isMutationRunning || isSystemAcceptedStatus} style={{ padding: "8px 12px", borderRadius: 6, border: `1.5px solid ${t.status === status ? B.green : B.border}`, background: t.status === status ? "#deeade" : B.white, color: t.status === status ? B.green : B.mid, fontWeight: t.status === status ? 700 : 500, fontSize: ".76rem", cursor: isMutationRunning || isSystemAcceptedStatus ? "not-allowed" : "pointer", fontFamily: "inherit", textAlign: "left", display: "flex", alignItems: "center", justifyContent: "space-between", opacity: isMutationRunning || isSystemAcceptedStatus ? 0.7 : 1 }}>
                     <span>{status}</span>
                     {t.status === status && <i className="ti ti-check" style={{ fontSize: 13, color: B.green }} aria-hidden="true" />}
                   </button>
                 ))}
+                <button disabled style={{ padding: "8px 12px", borderRadius: 6, border: `1.5px solid ${t.status === "Estimate Accepted" ? B.green : B.border}`, background: t.status === "Estimate Accepted" ? "#deeade" : "#F7F6F0", color: t.status === "Estimate Accepted" ? B.green : B.gray, fontWeight: t.status === "Estimate Accepted" ? 700 : 500, fontSize: ".76rem", cursor: "not-allowed", fontFamily: "inherit", textAlign: "left", display: "flex", alignItems: "center", justifyContent: "space-between", opacity: 0.9 }}>
+                  <span>Estimate Accepted</span>
+                  {t.status === "Estimate Accepted" && <i className="ti ti-check" style={{ fontSize: 13, color: B.green }} aria-hidden="true" />}
+                </button>
+                <div style={{ fontSize: ".72rem", color: B.gray, lineHeight: 1.5 }}>
+                  Set automatically when the customer accepts the published final estimate.
+                </div>
               </div>
             </Card>
 
@@ -4463,9 +4444,7 @@ export default function AdminWorkspace({
   ) => {
     const resolvedCustomerStatus = Object.prototype.hasOwnProperty.call(overrides, "customerStatus")
       ? overrides.customerStatus
-      : status === "Estimate Accepted"
-        ? "accepted"
-        : (ticket.customerStatus ?? null);
+      : (ticket.customerStatus ?? null);
 
     return {
       ...ticket,
@@ -4477,19 +4456,17 @@ export default function AdminWorkspace({
   };
 
   const applyTicketStatus = async (ticket, status, note) => {
+    if (status === "Estimate Accepted") {
+      return;
+    }
+
     const updated = buildWorkflowTicketUpdate(
       ticket,
       status,
-      note,
-      status === "Estimate Accepted"
-        ? { workflowStatus: "estimate_accepted", customerStatus: "accepted" }
-        : undefined
+      note
     );
     try {
       await onUpdateTicket(updated);
-      if (status === "Estimate Accepted") {
-        void refreshJobs();
-      }
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unable to update estimate status.";
       console.error("Unable to update estimate status:", error);
@@ -5820,7 +5797,7 @@ export default function AdminWorkspace({
       );
     }
     if (section === "dashboard") return <DashboardHomeSection tickets={tickets} jobs={jobs} events={allEvents} conflicts={activeConflicts} setSection={navigateToAdminSection} />;
-    if (section === "tickets") return <EstimateTicketsSection tickets={tickets} ticketsLoading={ticketsLoading} ticketsError={ticketsError} onSelectTicket={ticket => setSelectedTicketId(ticket.id)} onAcceptTicket={ticket => applyTicketStatus(ticket, "Estimate Accepted", "Estimate accepted and ready for office scheduling.")} onScheduleTicket={openResidentialSchedule} jobs={jobs} scheduledEstimateDatabaseIds={scheduledEstimateDatabaseIds} />;
+    if (section === "tickets") return <EstimateTicketsSection tickets={tickets} ticketsLoading={ticketsLoading} ticketsError={ticketsError} onSelectTicket={ticket => setSelectedTicketId(ticket.id)} onScheduleTicket={openResidentialSchedule} jobs={jobs} scheduledEstimateDatabaseIds={scheduledEstimateDatabaseIds} />;
     if (section === "calendar") return <CalendarSection events={scheduleEvents} crews={crews} onOpenJob={openCalendarRecord} focusDate={calendarFocusDate} pendingResidentialDraft={canManageSchedule ? residentialDraft : null} onPendingResidentialDraftChange={setResidentialDraft} onSavePendingResidentialSchedule={saveResidentialSchedule} onCancelPendingResidentialSchedule={() => { setResidentialDraft(null); setResidentialValidation(null); }} pendingBuilderSchedule={canManageSchedule ? builderScheduleDraft : null} onPendingBuilderScheduleChange={setBuilderScheduleDraft} onSavePendingBuilderSchedule={saveBuilderSchedule} onCancelPendingBuilderSchedule={() => { setBuilderScheduleDraft(null); setBuilderScheduleValidation(null); }} readOnly={calendarReadOnly} loading={scheduleLoading} error={scheduleError} residentialValidation={residentialValidation} onResidentialValidationReset={() => setResidentialValidation(null)} builderValidation={builderScheduleValidation} onBuilderValidationReset={() => setBuilderScheduleValidation(null)} />;
     if (section === "jobs") return <JobsSection jobs={jobs} crews={crews} loading={jobsLoading} error={jobsError} onSelectJob={jobId => setSelectedJobId(jobId)} onCreateBuilderJob={openBuilderJobModal} canCreateBuilderJob={canManageSchedule} />;
     if (section === "customers") return <CustomersSection customers={customers} loading={customersLoading} error={customersError} tickets={tickets} jobs={jobs} onSelectCustomer={openQuickViewForCustomer} search={customerSearch} onSearchChange={setCustomerSearch} typeFilter={customerTypeFilter} onTypeFilterChange={setCustomerTypeFilter} statusFilter={customerStatusFilter} onStatusFilterChange={setCustomerStatusFilter} />;

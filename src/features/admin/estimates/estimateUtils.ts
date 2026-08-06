@@ -779,6 +779,8 @@ export function buildEstimateUpdatePayload(updated: Ticket, previous?: Ticket | 
     || mapTicketStatusToWorkflowStatus(updated.status, previousWorkflowStatus || "new_request");
   const previousCustomerStatus = normalizeEstimateStatusValue(previous?.customerStatus);
   const nextCustomerStatus = normalizeEstimateStatusValue(updated.customerStatus);
+  const adminBlockedWorkflowStatus = nextWorkflowStatus === "estimate_accepted";
+  const adminBlockedCustomerStatus = nextCustomerStatus === "accepted";
   const statusManagedFollowUpNeeded = updated.status === "Follow Up Needed"
     || updated.status === "Site Visit Needed";
   const nextFollowUpNeeded = statusManagedFollowUpNeeded
@@ -787,12 +789,13 @@ export function buildEstimateUpdatePayload(updated: Ticket, previous?: Ticket | 
       ? false
       : !!updated.followUpNeeded;
 
-  if (!previous || nextWorkflowStatus !== previousWorkflowStatus) {
+  if (!adminBlockedWorkflowStatus && (!previous || nextWorkflowStatus !== previousWorkflowStatus)) {
     payload.workflow_status = nextWorkflowStatus;
   }
 
   if (
-    nextCustomerStatus
+    !adminBlockedCustomerStatus
+    && nextCustomerStatus
     && (!previous || nextCustomerStatus !== previousCustomerStatus)
   ) {
     payload.status = nextCustomerStatus;

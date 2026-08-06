@@ -215,6 +215,14 @@ export async function updateEstimate(
   estimateId: string,
   payload: EstimateUpdatePayload
 ): Promise<DatabaseEstimateWithCustomer> {
+  if (payload.status === "accepted") {
+    throw new Error("Estimate Accepted is system-controlled and can only be set when the customer accepts the published final estimate.");
+  }
+
+  if (payload.workflow_status === "estimate_accepted") {
+    throw new Error("Estimate Accepted is system-controlled and cannot be submitted through admin status updates.");
+  }
+
   const { data, error } = await supabase
     .from("estimates")
     .update(payload)

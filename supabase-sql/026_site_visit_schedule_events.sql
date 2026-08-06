@@ -3,6 +3,9 @@
 
 begin;
 
+alter table public.schedule_events
+  add column if not exists estimate_id uuid;
+
 alter table public.estimates
   add column if not exists workflow_status text;
 
@@ -115,15 +118,44 @@ create index estimates_workflow_status_idx
   on public.estimates (workflow_status);
 
 alter table public.schedule_events
-  add column if not exists estimate_id uuid;
-
-alter table public.schedule_events
   alter column job_id drop not null;
 
 alter table public.schedule_events
   drop constraint if exists schedule_events_estimate_id_fkey,
   drop constraint if exists schedule_events_builder_step_check,
   drop constraint if exists schedule_events_job_or_estimate_link_check;
+
+do $$
+declare
+  invalid_schedule_event record;
+begin
+  select
+    se.id,
+    se.builder_step,
+    se.job_id,
+    se.estimate_id
+  into invalid_schedule_event
+  from public.schedule_events se
+  where not (
+    (
+      se.builder_step = 'site_visit'
+      and se.estimate_id is not null
+      and se.job_id is null
+    )
+    or (
+      se.builder_step is distinct from 'site_visit'
+      and se.job_id is not null
+    )
+  )
+  limit 1;
+
+  if found then
+    raise exception
+      'Cannot add schedule_events_job_or_estimate_link_check because schedule event % violates the required job/estimate link rules.',
+      invalid_schedule_event.id
+      using detail = 'Rows with builder_step = ''site_visit'' must have estimate_id and no job_id. All other rows must keep a non-null job_id before running 026_site_visit_schedule_events.sql.';
+  end if;
+end $$;
 
 alter table public.schedule_events
   add constraint schedule_events_estimate_id_fkey

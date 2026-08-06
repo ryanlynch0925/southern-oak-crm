@@ -1,5 +1,5 @@
 ﻿import { useEffect, useMemo, useState } from "react";
-
+import { useRef } from "react";
 
 import FinanceDashboard from "./adminFinanceDashboard";
 import { supabase } from "./lib/supabase";
@@ -8,8 +8,11 @@ import BuilderRecordModal from "./features/admin/builders/BuilderRecordModal";
 import { BUILDER_COLOR_PALETTE, BUILDER_PHASES, BUILDER_SLAB_WORKFLOW, sortBuilderPhases } from "./features/admin/builders/builderUtils";
 import { canAccessFinance, canAccessEstimates, canManageCalendar, canViewCalendar, hasFullAccess } from "./features/admin/auth/roles";
 import { fetchProfileDisplayNames } from "./features/admin/calendar/calendarService";
+import { ACTIVE_SITE_VISIT_DATABASE_STATUSES } from "./features/admin/calendar/calendarTypes";
 import { calendarStatusToDatabaseStatus, databaseStatusToCalendarStatus, toDatabaseBuilderStep, toUiBuilderPhaseKey } from "./features/admin/calendar/calendarUtils";
 import CrewsSection from "./features/admin/crews/CrewsSection";
+import FinalEstimatePanel from "./features/admin/estimates/FinalEstimatePanel";
+import { databaseEstimateToTicket, mapTicketStatusToWorkflowStatus } from "./features/admin/estimates/estimateUtils";
 import { appCrewToDatabaseCrew, databaseCrewToAppCrew, normalizeCrew } from "./features/admin/crews/crewMappers";
 import { buildBuilderEvents, buildCalendarEvents, buildResidentialEvents, findCrewById, getCrewNumber } from "./features/admin/crews/crewUtils";
 import { buildCustomerSearchText, formatCustomerDisplayName, formatCustomerEmailLink, formatCustomerPhoneLink, formatCustomerTypeLabel, normalizeCustomerText } from "./features/admin/customers/customerService";
@@ -17,6 +20,7 @@ import { useBuilders } from "./features/admin/hooks/useBuilders";
 import { useCustomers } from "./features/admin/hooks/useCustomers";
 import { useJobs } from "./features/admin/hooks/useJobs";
 import { useScheduleEvents } from "./features/admin/hooks/useScheduleEvents";
+import { fetchEstimateById } from "./features/admin/services/estimateService";
 import { Btn, Card, Modal } from "./features/admin/shared/AdminPrimitives";
 import { fmtDate, fmtMetricNumber, todayIso } from "./features/admin/shared/adminFormatters";
 import { B, INP, labelStyle } from "./features/admin/shared/adminStyles";
@@ -24,6 +28,8 @@ import { B, INP, labelStyle } from "./features/admin/shared/adminStyles";
 const BRAND_LOGO_SRC = `${import.meta.env.BASE_URL}branding/main_logo.png`;
 const RESIDENTIAL_EVENT_COLOR = "#6C3483";
 const ADMIN_SECTION_STORAGE_KEY = "southern-oak-admin-section";
+const SITE_VISIT_CALENDAR_PREFIX = "site_visit:";
+const SITE_VISIT_DURATION_OPTIONS = [0.5, 0.75, 1, 1.5, 2, 3, 4];
 const ADMIN_SECTIONS = [
   { id: "dashboard", label: "Dashboard", icon: "ti-layout-dashboard" },
   { id: "tickets", label: "Estimate Tickets", icon: "ti-file-text" },
@@ -162,7 +168,8 @@ const ESTIMATE_STATUSES = [
   "Follow Up Needed",
   "Declined",
   "Site Visit Needed",
-  "Scheduled",
+  "Site Visit Scheduled",
+  "Site Visit Completed",
   "Final Quote Sent",
   "Estimate Accepted",
   "Ready to Schedule",
@@ -191,6 +198,8 @@ const STATUS_STYLES = {
   "Follow Up Needed": { c: "#9C640C", bg: "#FCF3CF" },
   Declined: { c: "#5F645D", bg: "#ECEEE9" },
   "Site Visit Needed": { c: "#A14B40", bg: "#F9E8E4" },
+  "Site Visit Scheduled": { c: "#25603C", bg: "#E6F3EA" },
+  "Site Visit Completed": { c: "#275A85", bg: "#E8F1FA" },
   Scheduled: { c: "#25603C", bg: "#E6F3EA" },
   "Final Quote Sent": { c: "#275A85", bg: "#E8F1FA" },
   "Estimate Accepted": { c: "#25603C", bg: "#E6F3EA" },
@@ -203,8 +212,6 @@ const STATUS_STYLES = {
   Lost: { c: "#5F645D", bg: "#ECEEE9" },
   Pending: { c: "#586455", bg: "#EEF1EC" },
 };
-const YES_DECISION_STATUSES = new Set(["Interested", "Site Visit Requested"]);
-const NO_DECISION_STATUSES = new Set(["Follow Up Needed", "Declined"]);
 const CUSTOMER_EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const DECISION_STYLES = {
   yes: { label: "Yes / Interested", short: "Yes", c: "#25603C", bg: "#E6F3EA" },
@@ -276,9 +283,91 @@ const DEFAULT_SETTINGS = {
 const fmtDateShort = iso => iso ? new Date(`${iso}T12:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "-";
 const fmtTime = value => value || "-";
 const fmtMoney = n => n != null ? `$${Number(n).toLocaleString()}` : "-";
+const normalizeTimeInputValue = value => String(value || "").slice(0, 5);
+const formatDurationLabel = hours => {
+  const numericHours = Number(hours || 0);
+  if (!numericHours) {
+    return "0 hours";
+  }
+
+  return `${numericHours} hour${numericHours === 1 ? "" : "s"}`;
+};
+const addHoursToTime = (timeValue, durationHours) => {
+  const normalizedTime = normalizeTimeInputValue(timeValue);
+  if (!normalizedTime) {
+    return "";
+  }
+
+  const [rawHours, rawMinutes] = normalizedTime.split(":");
+  const startMinutes = (Number(rawHours || 0) * 60) + Number(rawMinutes || 0);
+  const totalMinutes = startMinutes + Math.round(Number(durationHours || 0) * 60);
+  const normalizedMinutes = ((totalMinutes % 1440) + 1440) % 1440;
+  const hours = String(Math.floor(normalizedMinutes / 60)).padStart(2, "0");
+  const minutes = String(normalizedMinutes % 60).padStart(2, "0");
+
+  return `${hours}:${minutes}`;
+};
+const buildTicketProjectAddress = ticket => (
+  String(ticket.jobAddress || "").trim()
+  || [ticket.addr, ticket.city].filter(Boolean).join(", ")
+);
+const formatSiteVisitScheduleSummary = (scheduledDate, startTime, endTime = "") => {
+  if (!scheduledDate) {
+    return "Not scheduled";
+  }
+
+  const timeRange = [normalizeTimeInputValue(startTime), normalizeTimeInputValue(endTime)]
+    .filter(Boolean)
+    .join(" - ");
+
+  return timeRange ? `${fmtDate(scheduledDate)} at ${timeRange}` : fmtDate(scheduledDate);
+};
+const buildSiteVisitDraftFromTicket = (ticket, crews) => ({
+  estimateDatabaseId: ticket.databaseId || "",
+  estimateTicketId: ticket.id,
+  customer_name: ticket.name || "",
+  project_address: buildTicketProjectAddress(ticket),
+  project_type: ticket.ptype || "Site Visit",
+  scheduled_date: firstWorkingDate(plusDays(todayIso(), 1)),
+  scheduled_time: "09:00",
+  duration_hours: 1,
+  crew_id: crews[0]?.id || "",
+  notes: "",
+  weekend_override: false,
+});
+const buildSiteVisitConflictCandidate = draft => ({
+  id: `${SITE_VISIT_CALENDAR_PREFIX}${draft.estimateDatabaseId || draft.estimateTicketId || "draft"}`,
+  jobId: `${SITE_VISIT_CALENDAR_PREFIX}${draft.estimateDatabaseId || draft.estimateTicketId || "draft"}`,
+  phaseId: "",
+  schedule_type: "site_visit",
+  type_label: "Site Visit",
+  title: `Site Visit - ${draft.customer_name || "Estimate"}`,
+  customer_name: draft.customer_name || "",
+  builder_name: "",
+  job_type: draft.project_type || "Site Visit",
+  address: draft.project_address || "",
+  community: "",
+  lot_number: "",
+  work_order_number: draft.estimateTicketId || "",
+  date: draft.scheduled_date,
+  time: normalizeTimeInputValue(draft.scheduled_time),
+  end_time: addHoursToTime(draft.scheduled_time, draft.duration_hours),
+  crew_id: draft.crew_id || "",
+  crew_number: "",
+  capacity_used: Math.max(0.25, Math.min(1, Number(draft.duration_hours || 1) / 8)),
+  counts_toward_crew: !!draft.crew_id,
+  status: "Scheduled",
+  phase_label: "Site Visit",
+  color: RESIDENTIAL_EVENT_COLOR,
+  notes: draft.notes || "",
+});
+const normalizeCustomerDecisionStatus = status => String(status || "").trim().toLowerCase();
 const getDecisionCategory = ticket => {
-  if (ticket.estimateDecision === "yes" || YES_DECISION_STATUSES.has(ticket.status)) return "yes";
-  if (ticket.estimateDecision === "no" || NO_DECISION_STATUSES.has(ticket.status)) return "no";
+  const customerStatus = normalizeCustomerDecisionStatus(ticket.customerStatus);
+  if (customerStatus === "accepted") return "yes";
+  if (customerStatus === "declined" || customerStatus === "not_sure") return "no";
+  if (ticket.estimateDecision === "yes") return "yes";
+  if (ticket.estimateDecision === "no") return "no";
   return "pending";
 };
 const getDecisionStyle = ticket => DECISION_STYLES[getDecisionCategory(ticket)];
@@ -1028,7 +1117,7 @@ function EstimateTicketsSection({ tickets, ticketsLoading = false, ticketsError 
           const isScheduled = scheduledTicketIds.has(ticket.id) || (!!ticket.databaseId && scheduledEstimateDatabaseIds.has(ticket.databaseId));
           const decision = getDecisionCategory(ticket);
           const latestNotification = getLatestNotification(ticket);
-          const canAcceptEstimate = decision === "pending" && !["Estimate Accepted", "Ready to Schedule", "Scheduled", "Won", "Lost", "Declined"].includes(ticket.status);
+          const canAcceptEstimate = decision === "pending" && !["Estimate Accepted", "Ready to Schedule", "Site Visit Scheduled", "Won", "Lost", "Declined"].includes(ticket.status);
           return (
             <Card key={ticket.id} className="estimate-ticket-card">
               <div className="estimate-ticket-row">
@@ -1102,40 +1191,382 @@ function EstimateTicketsSection({ tickets, ticketsLoading = false, ticketsError 
   );
 }
 
-function TicketDetailView({ ticket, onBack, onUpdateTicket, onOpenSchedule, sourceJob }) {
+function TicketDetailView({
+  ticket,
+  appRole,
+  crews,
+  onBack,
+  onRefreshJobs,
+  onUpdateTicket,
+  onOpenSchedule,
+  onScheduleSiteVisit,
+  onViewSiteVisitCalendar,
+  sourceJob,
+}) {
   const [t, setT] = useState({ ...ticket });
   const [note, setNote] = useState("");
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
+  const [quickActionSuccess, setQuickActionSuccess] = useState("");
+  const [quickActionPending, setQuickActionPending] = useState("");
+  const [siteVisitDraft, setSiteVisitDraft] = useState(null);
+  const [siteVisitSaving, setSiteVisitSaving] = useState(false);
+  const [siteVisitError, setSiteVisitError] = useState("");
+  const persistedTicketRef = useRef(ticket);
+  const mutationRequestIdRef = useRef(0);
+  const mutationLockRef = useRef(false);
+  const isMountedRef = useRef(false);
   const decision = getDecisionCategory(t);
   const latestNotification = getLatestNotification(t);
-  const showSiteVisitAction = decision === "yes" && !["Site Visit Needed", "Scheduled", "Estimate Accepted", "Ready to Schedule", "Won"].includes(t.status);
+  const persistedWorkflowStatus = String(ticket.workflowStatus || "").trim().toLowerCase();
+  const persistedSiteVisitAppointment = ticket.siteVisitAppointment || null;
+  const siteVisitAppointment = t.siteVisitAppointment || persistedSiteVisitAppointment;
+  const effectiveWorkflowStatus = String(t.workflowStatus || persistedWorkflowStatus).trim().toLowerCase();
+  const canManageSiteVisits = canManageCalendar(appRole);
+  const showMoveToSiteVisitAction = canManageSiteVisits
+    && effectiveWorkflowStatus === "site_visit_requested"
+    && !siteVisitAppointment;
+  const showScheduleSiteVisitAction = canManageSiteVisits
+    && effectiveWorkflowStatus === "site_visit_needed"
+    && !siteVisitAppointment;
+  const showViewSiteVisitAction = !!siteVisitAppointment;
   const canScheduleJob = ["Estimate Accepted", "Ready to Schedule"].includes(t.status);
-  const canAcceptEstimate = decision === "pending" && !["Estimate Accepted", "Ready to Schedule", "Scheduled", "Won", "Lost", "Declined"].includes(t.status);
+  const canAcceptEstimate = decision === "pending" && !["Estimate Accepted", "Ready to Schedule", "Site Visit Scheduled", "Won", "Lost", "Declined"].includes(t.status);
+  const isQuickActionRunning = quickActionPending !== "" || siteVisitSaving;
+  const isMutationRunning = saving || isQuickActionRunning;
+
+  const invalidateMutationRequests = () => {
+    mutationRequestIdRef.current += 1;
+    mutationLockRef.current = false;
+  };
+
+  const beginMutationRequest = () => {
+    if (mutationLockRef.current) {
+      return null;
+    }
+
+    const requestId = mutationRequestIdRef.current + 1;
+    mutationRequestIdRef.current = requestId;
+    mutationLockRef.current = true;
+    return requestId;
+  };
+
+  const isCurrentMutationRequest = requestId => (
+    isMountedRef.current
+    && mutationRequestIdRef.current === requestId
+  );
+
+  const finishMutationRequest = requestId => {
+    if (mutationRequestIdRef.current === requestId) {
+      mutationLockRef.current = false;
+    }
+  };
+
+  const samePersistedTicket = (currentTicket, persistedTicket) => {
+    if (!currentTicket || !persistedTicket) {
+      return false;
+    }
+
+    if (currentTicket.databaseId && persistedTicket.databaseId) {
+      return currentTicket.databaseId === persistedTicket.databaseId;
+    }
+
+    return currentTicket.id === persistedTicket.id;
+  };
+
+  const restorePersistedDecisionFields = () => {
+    const persistedTicket = persistedTicketRef.current;
+
+    setT((current) => {
+      if (!samePersistedTicket(current, persistedTicket)) {
+        return current;
+      }
+
+      return {
+        ...current,
+        status: persistedTicket.status,
+        customerStatus: persistedTicket.customerStatus ?? null,
+        workflowStatus: persistedTicket.workflowStatus ?? null,
+        followUpNeeded: persistedTicket.followUpNeeded,
+        history: Array.isArray(persistedTicket.history) ? [...persistedTicket.history] : [],
+      };
+    });
+  };
+
+  useEffect(() => {
+    isMountedRef.current = true;
+
+    return () => {
+      isMountedRef.current = false;
+      invalidateMutationRequests();
+    };
+  }, []);
+
+  useEffect(() => {
+    persistedTicketRef.current = ticket;
+    invalidateMutationRequests();
+    setT({ ...ticket });
+    setSaving(false);
+    setSaved(false);
+    setQuickActionPending("");
+    setSiteVisitSaving(false);
+  }, [ticket]);
+
+  useEffect(() => {
+    setSiteVisitDraft(null);
+    setSiteVisitError("");
+    setSiteVisitSaving(false);
+  }, [ticket.databaseId, ticket.id]);
+
+  const buildStatusHistoryEntry = (status, message) => ({
+    s: status,
+    d: new Date().toISOString(),
+    n: message,
+  });
+
+  const appendStatusHistoryEntry = (history, entry) => {
+    const existingHistory = Array.isArray(history) ? history : [];
+    const lastEntry = existingHistory[existingHistory.length - 1];
+
+    if (lastEntry?.s === entry.s && lastEntry?.n === entry.n) {
+      return existingHistory;
+    }
+
+    return [...existingHistory, entry];
+  };
+
+  const buildTicketWithStatus = (currentTicket, status, entry) => ({
+    ...currentTicket,
+    status,
+    workflowStatus: mapTicketStatusToWorkflowStatus(
+      status,
+      currentTicket.workflowStatus || "new_request"
+    ),
+    followUpNeeded: status === "Follow Up Needed" || status === "Site Visit Needed",
+    history: appendStatusHistoryEntry(currentTicket.history, entry),
+  });
+
+  const mergeSavedTicketHistory = (savedTicket, entry) => {
+    const existingHistory = Array.isArray(savedTicket.history) ? [...savedTicket.history] : [];
+    const lastEntry = existingHistory[existingHistory.length - 1];
+
+    if (lastEntry?.s === entry.s && lastEntry?.n === "Current estimate status from Supabase") {
+      existingHistory[existingHistory.length - 1] = entry;
+      return {
+        ...savedTicket,
+        history: existingHistory,
+      };
+    }
+
+    return {
+      ...savedTicket,
+      history: appendStatusHistoryEntry(existingHistory, entry),
+    };
+  };
+
+  const refreshTicketFromDatabase = async () => {
+    if (!ticket.databaseId) {
+      return null;
+    }
+
+    const refreshedEstimate = await fetchEstimateById(ticket.databaseId);
+    const refreshedTicket = databaseEstimateToTicket(refreshedEstimate);
+    const syncedTicket = await onUpdateTicket(refreshedTicket);
+    const nextTicket = syncedTicket || refreshedTicket;
+    setT(nextTicket);
+    return nextTicket;
+  };
 
   const save = async () => {
+    const requestId = beginMutationRequest();
+    if (requestId == null) {
+      return;
+    }
+
+    const persistedBaseline = persistedTicketRef.current;
+
     setSaving(true);
     setSaveError("");
+    setQuickActionSuccess("");
+    setSiteVisitError("");
     try {
-      await onUpdateTicket(t);
+      const savedTicket = await onUpdateTicket(t);
+
+      if (!isCurrentMutationRequest(requestId)) {
+        return;
+      }
+
+      const previousCustomerStatus = normalizeCustomerDecisionStatus(persistedBaseline.customerStatus);
+      const savedCustomerStatus = normalizeCustomerDecisionStatus(savedTicket?.customerStatus ?? t.customerStatus);
+      if (savedTicket) {
+        setT(savedTicket);
+      }
+      if (previousCustomerStatus !== "accepted" && savedCustomerStatus === "accepted") {
+        void onRefreshJobs();
+      }
       setSaved(true);
       setTimeout(() => {
         setSaved(false);
         onBack();
       }, 350);
     } catch (error) {
+      if (!isCurrentMutationRequest(requestId)) {
+        return;
+      }
+
       const message = error instanceof Error ? error.message : "Unable to save estimate changes.";
       console.error("Unable to save ticket:", error);
       setSaveError(message);
+      restorePersistedDecisionFields();
     } finally {
-      setSaving(false);
+      finishMutationRequest(requestId);
+
+      if (isCurrentMutationRequest(requestId)) {
+        setSaving(false);
+      }
     }
   };
 
   const changeStatus = status => {
-    const entry = { s: status, d: new Date().toISOString(), n: "Status updated in admin dashboard" };
-    setT(prev => ({ ...prev, status, history: [...(prev.history || []), entry] }));
+    if (isMutationRunning) {
+      return;
+    }
+
+    const entry = buildStatusHistoryEntry(status, "Status updated in admin dashboard");
+    setQuickActionSuccess("");
+    setT((prev) => {
+      const nextTicket = buildTicketWithStatus(prev, status, entry);
+      return {
+        ...nextTicket,
+        workflowStatus: status === "Estimate Accepted"
+          ? "estimate_accepted"
+          : nextTicket.workflowStatus,
+        customerStatus: status === "Estimate Accepted"
+          ? "accepted"
+          : prev.customerStatus ?? null,
+      };
+    });
+  };
+
+  const runQuickAction = async ({
+    status,
+    note: historyNote,
+    successMessage,
+    workflowStatus,
+    customerStatus,
+  }: {
+    status: string;
+    note: string;
+    successMessage: string;
+    workflowStatus?: string;
+    customerStatus?: string | null;
+  }) => {
+    const requestId = beginMutationRequest();
+    if (requestId == null) {
+      return;
+    }
+
+    const entry = buildStatusHistoryEntry(status, historyNote);
+    const resolvedCustomerStatus = customerStatus ?? (
+      status === "Estimate Accepted"
+        ? "accepted"
+        : t.customerStatus ?? null
+    );
+    const updatedTicket = {
+      ...buildTicketWithStatus(t, status, entry),
+      workflowStatus: workflowStatus || mapTicketStatusToWorkflowStatus(status, t.workflowStatus || "new_request"),
+      customerStatus: resolvedCustomerStatus,
+    };
+
+    setQuickActionPending(status);
+    setQuickActionSuccess("");
+    setSaveError("");
+    setSiteVisitError("");
+
+    try {
+      const savedTicket = await onUpdateTicket(updatedTicket);
+
+      if (!isCurrentMutationRequest(requestId)) {
+        return;
+      }
+
+      const nextTicket = savedTicket
+        ? mergeSavedTicketHistory(savedTicket, entry)
+        : updatedTicket;
+
+      setT(nextTicket);
+      setQuickActionSuccess(successMessage);
+
+      if (status === "Estimate Accepted") {
+        void onRefreshJobs();
+      }
+    } catch (error) {
+      if (!isCurrentMutationRequest(requestId)) {
+        return;
+      }
+
+      const message = error instanceof Error ? error.message : "Unable to run the quick action.";
+      console.error("Unable to run estimate quick action:", error);
+      setSaveError(message);
+    } finally {
+      finishMutationRequest(requestId);
+
+      if (isCurrentMutationRequest(requestId)) {
+        setQuickActionPending("");
+      }
+    }
+  };
+
+  const openSiteVisitSchedule = () => {
+    if (isMutationRunning) {
+      return;
+    }
+
+    setQuickActionSuccess("");
+    setSaveError("");
+    setSiteVisitError("");
+    setSiteVisitDraft(buildSiteVisitDraftFromTicket(t, crews));
+  };
+
+  const saveSiteVisitSchedule = async draft => {
+    const requestId = beginMutationRequest();
+    if (requestId == null) {
+      return;
+    }
+
+    setSiteVisitSaving(true);
+    setQuickActionSuccess("");
+    setSaveError("");
+    setSiteVisitError("");
+
+    try {
+      const savedTicket = await onScheduleSiteVisit(t, draft);
+
+      if (!isCurrentMutationRequest(requestId)) {
+        return;
+      }
+
+      if (savedTicket) {
+        setT(savedTicket);
+      }
+      setSiteVisitDraft(null);
+      setQuickActionSuccess("Site visit scheduled and workflow moved to Site Visit Scheduled.");
+    } catch (error) {
+      if (!isCurrentMutationRequest(requestId)) {
+        return;
+      }
+
+      const message = error instanceof Error ? error.message : "Unable to schedule the site visit.";
+      console.error("Unable to schedule site visit:", error);
+      setSiteVisitError(message);
+    } finally {
+      finishMutationRequest(requestId);
+
+      if (isCurrentMutationRequest(requestId)) {
+        setSiteVisitSaving(false);
+      }
+    }
   };
 
   const addNote = () => {
@@ -1158,16 +1589,18 @@ function TicketDetailView({ ticket, onBack, onUpdateTicket, onOpenSchedule, sour
           </div>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             {saved && <span style={{ fontSize: ".75rem", color: "#A9DFBF", fontWeight: 600 }}><i className="ti ti-check" style={{ marginRight: 4 }} aria-hidden="true" />Saved</span>}
-            <Btn onClick={save} v="green" sm disabled={saving}><i className="ti ti-device-floppy" style={{ marginRight: 5, fontSize: 13, verticalAlign: -2 }} aria-hidden="true" />{saving ? "Saving..." : "Save Changes"}</Btn>
+            <Btn onClick={save} v="green" sm disabled={isMutationRunning}><i className="ti ti-device-floppy" style={{ marginRight: 5, fontSize: 13, verticalAlign: -2 }} aria-hidden="true" />{saving ? "Saving..." : "Save Changes"}</Btn>
           </div>
         </div>
       </div>
 
       <div style={{ maxWidth: 1100, margin: "0 auto", padding: "20px 16px 60px" }}>
-        {saveError && (
+        {(saveError || quickActionSuccess) && (
           <Card style={{ marginBottom: 16, background: "#FFF8E1", borderColor: "#E5D7A7" }}>
-            <div style={{ fontSize: ".82rem", color: "#8A6A12", fontWeight: 700 }}>Estimate changes were not saved.</div>
-            <div style={{ fontSize: ".76rem", color: B.gray, marginTop: 4 }}>{saveError}</div>
+            <div style={{ fontSize: ".82rem", color: quickActionSuccess ? "#25603C" : "#8A6A12", fontWeight: 700 }}>
+              {quickActionSuccess ? "Quick action completed." : "Estimate changes were not saved."}
+            </div>
+            <div style={{ fontSize: ".76rem", color: B.gray, marginTop: 4 }}>{quickActionSuccess || saveError}</div>
           </Card>
         )}
 
@@ -1215,6 +1648,13 @@ function TicketDetailView({ ticket, onBack, onUpdateTicket, onOpenSchedule, sour
               </div>}
             </Card>
 
+            <FinalEstimatePanel
+              ticket={t}
+              appRole={appRole}
+              setTicket={setT}
+              onRefreshTicket={refreshTicketFromDatabase}
+            />
+
             {t.files && t.files.length > 0 && <Card>
               <h3 style={{ fontSize: ".82rem", fontWeight: 700, color: B.dark, textTransform: "uppercase", letterSpacing: .5, marginBottom: 12 }}><i className="ti ti-paperclip" style={{ marginRight: 6, color: B.bronze }} aria-hidden="true" />Files Uploaded ({t.files.length})</h3>
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -1257,10 +1697,110 @@ function TicketDetailView({ ticket, onBack, onUpdateTicket, onOpenSchedule, sour
 
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
             <Card>
+              <h3 style={{ fontSize: ".82rem", fontWeight: 700, color: B.dark, textTransform: "uppercase", letterSpacing: .5, marginBottom: 12 }}><i className="ti ti-bolt" style={{ marginRight: 6, color: B.bronze }} aria-hidden="true" />Quick Actions</h3>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {canAcceptEstimate && (
+                  <Btn
+                    full
+                    sm
+                    v="green"
+                    onClick={() => {
+                      void runQuickAction({
+                        status: "Estimate Accepted",
+                        note: "Estimate accepted and ready for office scheduling.",
+                        successMessage: "Estimate moved to Estimate Accepted.",
+                        workflowStatus: "estimate_accepted",
+                        customerStatus: "accepted",
+                      });
+                    }}
+                    disabled={isMutationRunning}
+                  >
+                    <i className="ti ti-check" style={{ marginRight: 5, fontSize: 13 }} aria-hidden="true" />
+                    {quickActionPending === "Estimate Accepted" ? "Updating..." : "Accept Estimate"}
+                  </Btn>
+                )}
+                {showMoveToSiteVisitAction && (
+                  <Btn
+                    full
+                    sm
+                    v="green"
+                    onClick={() => {
+                      void runQuickAction({
+                        status: "Site Visit Needed",
+                        note: "Site visit approved for scheduling.",
+                        successMessage: "Estimate moved to Site Visit Needed.",
+                      });
+                    }}
+                    disabled={isMutationRunning}
+                  >
+                    <i className="ti ti-map-search" style={{ marginRight: 5, fontSize: 13 }} aria-hidden="true" />
+                    {quickActionPending === "Site Visit Needed" ? "Updating..." : "Move to Site Visit Needed"}
+                  </Btn>
+                )}
+                {showScheduleSiteVisitAction && (
+                  <Btn full sm v="green" onClick={openSiteVisitSchedule} disabled={isMutationRunning}>
+                    <i className="ti ti-calendar-plus" style={{ marginRight: 5, fontSize: 13 }} aria-hidden="true" />
+                    Schedule Site Visit
+                  </Btn>
+                )}
+                {showViewSiteVisitAction && (
+                  <Btn full sm v="dark" onClick={() => onViewSiteVisitCalendar(siteVisitAppointment)}>
+                    <i className="ti ti-calendar-event" style={{ marginRight: 5, fontSize: 13 }} aria-hidden="true" />
+                    View on Calendar
+                  </Btn>
+                )}
+                {canScheduleJob && (
+                  <Btn full sm v="dark" onClick={() => onOpenSchedule(t)} disabled={isMutationRunning}>
+                    <i className="ti ti-calendar-event" style={{ marginRight: 5, fontSize: 13 }} aria-hidden="true" />Schedule Job
+                  </Btn>
+                )}
+                {!canAcceptEstimate && !showMoveToSiteVisitAction && !showScheduleSiteVisitAction && !showViewSiteVisitAction && !canScheduleJob && (
+                  <div style={{ fontSize: ".76rem", color: B.gray, lineHeight: 1.5 }}>This lead is best handled through follow-up and status updates before scheduling work.</div>
+                )}
+                <Btn full sm v="outline" onClick={save} disabled={isMutationRunning}>
+                  <i className="ti ti-device-floppy" style={{ marginRight: 5, fontSize: 13 }} aria-hidden="true" />{saving ? "Saving..." : "Save Lead Updates"}
+                </Btn>
+                {sourceJob && <div style={{ fontSize: ".75rem", color: B.green, fontWeight: 700 }}>This estimate already has a scheduled job.</div>}
+              </div>
+            </Card>
+
+            {siteVisitAppointment && (
+              <Card>
+                <h3 style={{ fontSize: ".82rem", fontWeight: 700, color: B.dark, textTransform: "uppercase", letterSpacing: .5, marginBottom: 12 }}><i className="ti ti-map-pin" style={{ marginRight: 6, color: B.bronze }} aria-hidden="true" />Site Visit Appointment</h3>
+                <div style={{ display: "grid", gap: 10 }}>
+                  <div>
+                    <div style={{ fontSize: ".72rem", color: B.gray, marginBottom: 2 }}>Scheduled</div>
+                    <div style={{ fontSize: ".82rem", color: B.dark, fontWeight: 600 }}>{formatSiteVisitScheduleSummary(siteVisitAppointment.scheduledDate, siteVisitAppointment.startTime, siteVisitAppointment.endTime)}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: ".72rem", color: B.gray, marginBottom: 2 }}>Assigned crew</div>
+                    <div style={{ fontSize: ".82rem", color: B.dark }}>{siteVisitAppointment.crewLabel || "Unassigned"}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: ".72rem", color: B.gray, marginBottom: 2 }}>Address</div>
+                    <div style={{ fontSize: ".82rem", color: B.dark }}>{siteVisitAppointment.projectAddress || "-"}</div>
+                  </div>
+                  {siteVisitAppointment.notes && (
+                    <div>
+                      <div style={{ fontSize: ".72rem", color: B.gray, marginBottom: 2 }}>Notes</div>
+                      <div style={{ fontSize: ".8rem", color: B.mid, lineHeight: 1.5 }}>{siteVisitAppointment.notes}</div>
+                    </div>
+                  )}
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    <Btn sm v="outline" onClick={() => onViewSiteVisitCalendar(siteVisitAppointment)}>
+                      <i className="ti ti-calendar-event" style={{ marginRight: 5, fontSize: 13 }} aria-hidden="true" />
+                      View on Calendar
+                    </Btn>
+                  </div>
+                </div>
+              </Card>
+            )}
+
+            <Card>
               <h3 style={{ fontSize: ".82rem", fontWeight: 700, color: B.dark, textTransform: "uppercase", letterSpacing: .5, marginBottom: 12 }}><i className="ti ti-tag" style={{ marginRight: 6, color: B.bronze }} aria-hidden="true" />Status</h3>
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 {ESTIMATE_STATUSES.map(status => (
-                  <button key={status} onClick={() => changeStatus(status)} style={{ padding: "8px 12px", borderRadius: 6, border: `1.5px solid ${t.status === status ? B.green : B.border}`, background: t.status === status ? "#deeade" : B.white, color: t.status === status ? B.green : B.mid, fontWeight: t.status === status ? 700 : 500, fontSize: ".76rem", cursor: "pointer", fontFamily: "inherit", textAlign: "left", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                  <button key={status} onClick={() => changeStatus(status)} disabled={isMutationRunning} style={{ padding: "8px 12px", borderRadius: 6, border: `1.5px solid ${t.status === status ? B.green : B.border}`, background: t.status === status ? "#deeade" : B.white, color: t.status === status ? B.green : B.mid, fontWeight: t.status === status ? 700 : 500, fontSize: ".76rem", cursor: isMutationRunning ? "not-allowed" : "pointer", fontFamily: "inherit", textAlign: "left", display: "flex", alignItems: "center", justifyContent: "space-between", opacity: isMutationRunning ? 0.7 : 1 }}>
                     <span>{status}</span>
                     {t.status === status && <i className="ti ti-check" style={{ fontSize: 13, color: B.green }} aria-hidden="true" />}
                   </button>
@@ -1315,37 +1855,138 @@ function TicketDetailView({ ticket, onBack, onUpdateTicket, onOpenSchedule, sour
               </div>
             </Card>
 
-            <Card>
-              <h3 style={{ fontSize: ".82rem", fontWeight: 700, color: B.dark, textTransform: "uppercase", letterSpacing: .5, marginBottom: 12 }}><i className="ti ti-bolt" style={{ marginRight: 6, color: B.bronze }} aria-hidden="true" />Quick Actions</h3>
-              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                {canAcceptEstimate && (
-                  <Btn full sm v="green" onClick={() => { changeStatus("Estimate Accepted"); }}>
-                    <i className="ti ti-check" style={{ marginRight: 5, fontSize: 13 }} aria-hidden="true" />Accept Estimate
-                  </Btn>
-                )}
-                {showSiteVisitAction && (
-                  <Btn full sm v="green" onClick={() => { changeStatus("Site Visit Needed"); }}>
-                    <i className="ti ti-map-search" style={{ marginRight: 5, fontSize: 13 }} aria-hidden="true" />Move to Site Visit Needed
-                  </Btn>
-                )}
-                {canScheduleJob && (
-                  <Btn full sm v="dark" onClick={() => onOpenSchedule(t)}>
-                    <i className="ti ti-calendar-event" style={{ marginRight: 5, fontSize: 13 }} aria-hidden="true" />Schedule Job
-                  </Btn>
-                )}
-                {!canAcceptEstimate && !showSiteVisitAction && !canScheduleJob && (
-                  <div style={{ fontSize: ".76rem", color: B.gray, lineHeight: 1.5 }}>This lead is best handled through follow-up and status updates before scheduling work.</div>
-                )}
-                <Btn full sm v="outline" onClick={save} disabled={saving}>
-                  <i className="ti ti-device-floppy" style={{ marginRight: 5, fontSize: 13 }} aria-hidden="true" />{saving ? "Saving..." : "Save Lead Updates"}
-                </Btn>
-                {sourceJob && <div style={{ fontSize: ".75rem", color: B.green, fontWeight: 700 }}>This estimate already has a scheduled job.</div>}
-              </div>
-            </Card>
           </div>
         </div>
       </div>
+
+      {siteVisitDraft && (
+        <SiteVisitScheduleModal
+          draft={siteVisitDraft}
+          crews={crews}
+          onClose={() => {
+            if (siteVisitSaving) {
+              return;
+            }
+            setSiteVisitDraft(null);
+            setSiteVisitError("");
+          }}
+          onSave={saveSiteVisitSchedule}
+          saving={siteVisitSaving}
+          error={siteVisitError}
+        />
+      )}
     </div>
+  );
+}
+
+function SiteVisitScheduleModal({ draft, crews, onClose, onSave, saving = false, error = "" }) {
+  const [local, setLocal] = useState(draft);
+
+  useEffect(() => {
+    setLocal(draft);
+  }, [draft]);
+
+  return (
+    <Modal title="Schedule Site Visit" onClose={onClose} width={680}>
+      <div className="schedule-modal-stack">
+        <div className="schedule-modal-intro">
+          <div style={{ fontSize: ".82rem", color: B.gray }}>
+            Schedule the site visit using the existing calendar crew assignment flow. Sundays remain blocked and Saturday overrides follow the standard calendar rules.
+          </div>
+        </div>
+        <FormValidationMessage message={error} style={{ marginBottom: error ? 12 : 0 }} />
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 14 }}>
+        <div>
+          <label style={labelStyle}>Customer name</label>
+          <input style={{ ...INP, background: "#F7F6F0" }} value={local.customer_name} disabled />
+        </div>
+        <div>
+          <label style={labelStyle}>Estimate ticket ID</label>
+          <input style={{ ...INP, background: "#F7F6F0" }} value={local.estimateTicketId} disabled />
+        </div>
+        <div>
+          <label style={labelStyle}>Project type</label>
+          <input style={{ ...INP, background: "#F7F6F0" }} value={local.project_type} disabled />
+        </div>
+        <div>
+          <label style={labelStyle}>Project address</label>
+          <input style={{ ...INP, background: "#F7F6F0" }} value={local.project_address} disabled />
+        </div>
+        <div>
+          <label htmlFor="site-visit-scheduled-date" style={labelStyle}>Site visit date</label>
+          <input
+            id="site-visit-scheduled-date"
+            style={INP}
+            type="date"
+            value={local.scheduled_date}
+            onChange={e => setLocal(prev => ({ ...prev, scheduled_date: e.target.value }))}
+            disabled={saving}
+          />
+        </div>
+        <div>
+          <label htmlFor="site-visit-scheduled-time" style={labelStyle}>Start time</label>
+          <input
+            id="site-visit-scheduled-time"
+            style={INP}
+            type="time"
+            value={local.scheduled_time}
+            onChange={e => setLocal(prev => ({ ...prev, scheduled_time: e.target.value }))}
+            disabled={saving}
+          />
+        </div>
+        <div>
+          <label htmlFor="site-visit-crew" style={labelStyle}>Assigned crew</label>
+          <select
+            id="site-visit-crew"
+            style={{ ...INP, cursor: saving ? "default" : "pointer" }}
+            value={local.crew_id}
+            onChange={e => setLocal(prev => ({ ...prev, crew_id: e.target.value }))}
+            disabled={saving}
+          >
+            {crews.map(crew => <option key={crew.id} value={crew.id}>{crew.name}</option>)}
+          </select>
+        </div>
+        <div>
+          <label htmlFor="site-visit-duration" style={labelStyle}>Estimated duration</label>
+          <select
+            id="site-visit-duration"
+            style={{ ...INP, cursor: saving ? "default" : "pointer" }}
+            value={String(local.duration_hours)}
+            onChange={e => setLocal(prev => ({ ...prev, duration_hours: Number(e.target.value || 1) }))}
+            disabled={saving}
+          >
+            {SITE_VISIT_DURATION_OPTIONS.map(option => (
+              <option key={option} value={option}>{formatDurationLabel(option)}</option>
+            ))}
+          </select>
+          <div style={{ fontSize: ".72rem", color: B.gray, marginTop: 4 }}>
+            Estimated end time: {addHoursToTime(local.scheduled_time, local.duration_hours) || "-"}
+          </div>
+        </div>
+        <div style={{ gridColumn: "1 / -1" }}>
+          <label htmlFor="site-visit-notes" style={labelStyle}>Site visit notes</label>
+          <textarea
+            id="site-visit-notes"
+            style={{ ...INP, minHeight: 96 }}
+            value={local.notes}
+            onChange={e => setLocal(prev => ({ ...prev, notes: e.target.value }))}
+            disabled={saving}
+          />
+        </div>
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, marginTop: 18, alignItems: "center", flexWrap: "wrap" }}>
+        <div style={{ fontSize: ".76rem", color: B.gray }}>
+          This creates a real calendar event and then updates the workflow to Site Visit Scheduled automatically.
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <Btn v="outline" onClick={onClose} disabled={saving}>Cancel</Btn>
+          <Btn v="green" onClick={() => onSave(local)} disabled={saving}>
+            {saving ? "Scheduling..." : "Schedule Site Visit"}
+          </Btn>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
@@ -1353,6 +1994,7 @@ function CalendarSection({
   events,
   crews,
   onOpenJob,
+  focusDate,
   pendingResidentialDraft,
   onPendingResidentialDraftChange,
   onSavePendingResidentialSchedule,
@@ -1386,6 +2028,12 @@ function CalendarSection({
       setFilters(prev => ({ ...prev, scheduleType: prev.scheduleType === "builder_slab" ? "All" : prev.scheduleType }));
     }
   }, [pendingResidentialDraft?.scheduled_date, pendingBuilderSchedule?.scheduled_date]);
+
+  useEffect(() => {
+    if (focusDate) {
+      setAnchorDate(focusDate);
+    }
+  }, [focusDate]);
 
   useEffect(() => {
     if (!residentialValidation?.field) return;
@@ -1459,8 +2107,15 @@ function CalendarSection({
   const residentialSummaryError = residentialValidation && !residentialValidation.field ? residentialValidation.message : "";
   const builderSummaryError = builderValidation && !builderValidation.field ? builderValidation.message : "";
   const getEventTitle = event => event.customer_name || event.builder_name || event.title;
-  const getEventSubtitle = event => event.schedule_type === "builder_slab" ? (event.phase_label || "Builder phase") : (event.job_type || "Residential");
+  const getEventSubtitle = event => (
+    event.schedule_type === "builder_slab"
+      ? (event.phase_label || "Builder phase")
+      : event.schedule_type === "site_visit"
+        ? (event.address || event.job_type || "Site Visit")
+        : (event.job_type || "Residential")
+  );
   const getEventMeta = event => `${event.time || "-"} · Crew ${findCrewById(crews, event.crew_id)?.number || "-"}`;
+  const getOpenRecordLabel = event => event.schedule_type === "site_visit" ? "Open estimate" : "Open job";
   const handleResidentialDraftChange = patch => {
     onResidentialValidationReset();
     onPendingResidentialDraftChange({ ...pendingResidentialDraft, ...patch });
@@ -1476,7 +2131,7 @@ function CalendarSection({
         <div className="calendar-header-top">
           <div className="calendar-header-copy">
             <h1 style={{ fontSize: "1.3rem", fontWeight: 700, color: B.dark, margin: 0 }}>Calendar Schedule</h1>
-            <p style={{ fontSize: ".82rem", color: B.gray, margin: "6px 0 0" }}>View residential jobs and builder slab phases by month, week, or day with crew and builder filters.</p>
+            <p style={{ fontSize: ".82rem", color: B.gray, margin: "6px 0 0" }}>View residential jobs, site visits, and builder slab phases by month, week, or day with crew and builder filters.</p>
           </div>
           <div className="calendar-view-toggle" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             {["month", "week", "day"].map(item => (
@@ -1509,8 +2164,9 @@ function CalendarSection({
           <label className="calendar-filter-field">
             <span className="calendar-filter-label">Work type</span>
             <select value={filters.scheduleType} onChange={e => setFilters(prev => ({ ...prev, scheduleType: e.target.value }))} style={{ ...INP, cursor: "pointer" }}>
-              <option value="All">Residential and builder jobs</option>
+              <option value="All">Residential, site visits, and builder jobs</option>
               <option value="residential">Residential jobs</option>
+              <option value="site_visit">Site visits</option>
               <option value="builder_slab">Builder jobs</option>
             </select>
           </label>
@@ -1647,7 +2303,7 @@ function CalendarSection({
                     <div className="calendar-day-event-actions">
                       <span className="calendar-day-event-meta">{`${event.time} · Crew ${findCrewById(crews, event.crew_id)?.number || "-"} · ${fmtCap(event.capacity_used)}`}</span>
                       <Pill status={event.status} />
-                      {!schedulingLocked && <Btn sm v="outline" onClick={() => onOpenJob(event.jobId)}>Open job</Btn>}
+                      {!schedulingLocked && <Btn sm v="outline" onClick={() => onOpenJob(event.jobId)}>{getOpenRecordLabel(event)}</Btn>}
                     </div>
                   </div>
                 </Card>
@@ -3364,6 +4020,7 @@ export default function AdminWorkspace({
   const [selectedTicketId, setSelectedTicketId] = useState(null);
   const [selectedJobId, setSelectedJobId] = useState(null);
   const [selectedCalendarJobId, setSelectedCalendarJobId] = useState(null);
+  const [calendarFocusDate, setCalendarFocusDate] = useState("");
   const [selectedCustomerId, setSelectedCustomerId] = useState(null);
   const [quickViewCustomerId, setQuickViewCustomerId] = useState(null);
   const [customerModalCustomerId, setCustomerModalCustomerId] = useState(null);
@@ -3397,6 +4054,7 @@ export default function AdminWorkspace({
     refreshScheduleEvents,
     createEvent: createScheduleEvent,
     updateEvent: updateScheduleEvent,
+    deleteEvent: deleteScheduleEvent,
     findJobIdByEstimateId,
   } = useScheduleEvents(canViewCalendar(appRole));
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
@@ -3565,6 +4223,28 @@ export default function AdminWorkspace({
     const text = `${summary?.message || ""} ${summary?.details || ""} ${summary?.hint || ""}`.toLowerCase();
     return summary?.code === "23505" && text.includes("schedule_events_residential_job_unique_idx");
   };
+  const isSiteVisitScheduleUniqueViolation = error => {
+    const summary = error?.supabaseError;
+    const text = `${summary?.message || ""} ${summary?.details || ""} ${summary?.hint || ""}`.toLowerCase();
+    return summary?.code === "23505" && text.includes("schedule_events_one_active_site_visit_per_estimate_idx");
+  };
+  const appendWorkflowHistoryEntry = (ticket, status, note) => {
+    const existingHistory = Array.isArray(ticket.history) ? ticket.history : [];
+    const lastEntry = existingHistory[existingHistory.length - 1];
+
+    if (lastEntry?.s === status && lastEntry?.n === note) {
+      return existingHistory;
+    }
+
+    return [...existingHistory, { s: status, d: new Date().toISOString(), n: note }];
+  };
+  const findActiveSiteVisitScheduleRow = estimateDatabaseId => (
+    scheduleRows.find(row =>
+      row.builder_step === "site_visit"
+      && row.estimate_id === estimateDatabaseId
+      && ACTIVE_SITE_VISIT_DATABASE_STATUSES.includes(row.status)
+    ) || null
+  );
   const selectedJob = hydrateResidentialJob(jobs.find(job => job.id === selectedJobId) || null);
   const selectedCalendarJob = calendarJobs.find(job => job.id === selectedCalendarJobId) || null;
   const allEvents = useMemo(() => buildCalendarEvents(jobs), [jobs]);
@@ -3760,19 +4440,54 @@ export default function AdminWorkspace({
   const jobsNeedingAttention = jobs.filter(job => job.status === "Delayed" || job.status === "Ready to Schedule").length;
 
   const updateTicket = async updated => {
-    await onUpdateTicket(updated);
-    setSelectedTicketId(updated.id);
+    const savedTicket = await onUpdateTicket(updated);
+    setSelectedTicketId((savedTicket || updated).id);
+    return savedTicket || updated;
+  };
+
+  const syncTicketFromDatabase = async estimateDatabaseId => {
+    if (!estimateDatabaseId) {
+      return null;
+    }
+
+    const refreshedEstimate = await fetchEstimateById(estimateDatabaseId);
+    const refreshedTicket = databaseEstimateToTicket(refreshedEstimate);
+    return updateTicket(refreshedTicket);
+  };
+
+  const buildWorkflowTicketUpdate = (
+    ticket,
+    status,
+    note,
+    overrides: { workflowStatus?: string; customerStatus?: string | null } = {}
+  ) => {
+    const resolvedCustomerStatus = Object.prototype.hasOwnProperty.call(overrides, "customerStatus")
+      ? overrides.customerStatus
+      : status === "Estimate Accepted"
+        ? "accepted"
+        : (ticket.customerStatus ?? null);
+
+    return {
+      ...ticket,
+      status,
+      workflowStatus: overrides.workflowStatus || mapTicketStatusToWorkflowStatus(status, ticket.workflowStatus || "new_request"),
+      customerStatus: resolvedCustomerStatus,
+      history: appendWorkflowHistoryEntry(ticket, status, note),
+    };
   };
 
   const applyTicketStatus = async (ticket, status, note) => {
-    const updated = {
-      ...ticket,
+    const updated = buildWorkflowTicketUpdate(
+      ticket,
       status,
-      history: [...(ticket.history || []), { s: status, d: new Date().toISOString(), n: note }],
-    };
+      note,
+      status === "Estimate Accepted"
+        ? { workflowStatus: "estimate_accepted", customerStatus: "accepted" }
+        : undefined
+    );
     try {
       await onUpdateTicket(updated);
-      if (status === "Estimate Accepted" || status === "Scheduled") {
+      if (status === "Estimate Accepted") {
         void refreshJobs();
       }
     } catch (error) {
@@ -3784,6 +4499,37 @@ export default function AdminWorkspace({
 
   const showScheduleWriteError = (actionLabel, error) => {
     showScheduleWarning("Scheduling Update Failed", buildScheduleErrorMessage(actionLabel, error));
+  };
+
+  const openSiteVisitOnCalendar = appointment => {
+    if (!appointment) {
+      return;
+    }
+
+    setSelectedTicketId(null);
+    setSelectedJobId(null);
+    setSelectedCalendarJobId(null);
+    setCalendarFocusDate(appointment.scheduledDate || todayIso());
+    setSection("calendar");
+  };
+
+  const openCalendarRecord = jobId => {
+    if (String(jobId || "").startsWith(SITE_VISIT_CALENDAR_PREFIX)) {
+      const estimateDatabaseId = String(jobId).slice(SITE_VISIT_CALENDAR_PREFIX.length);
+      const matchingTicket = tickets.find(ticket => ticket.databaseId === estimateDatabaseId);
+
+      if (matchingTicket) {
+        setSelectedJobId(null);
+        setSelectedCalendarJobId(null);
+        setSelectedTicketId(matchingTicket.id);
+        setSection("calendar");
+        return;
+      }
+    }
+
+    setSelectedTicketId(null);
+    setSelectedCalendarJobId(jobId);
+    setSection("calendar");
   };
 
   const findCalendarJob = jobId => calendarJobs.find(job => job.id === jobId) || null;
@@ -3986,6 +4732,133 @@ export default function AdminWorkspace({
     return "";
   };
 
+  const saveSiteVisitSchedule = async (ticket, draft) => {
+    if (!canManageSchedule) {
+      throw new Error("You do not have permission to schedule site visits.");
+    }
+
+    if (!ticket?.databaseId || !draft?.estimateDatabaseId) {
+      throw new Error("This estimate is missing its database ID, so the site visit cannot be scheduled.");
+    }
+
+    if (!draft.scheduled_date) {
+      throw new Error("Choose a site visit date before scheduling.");
+    }
+
+    if (!draft.scheduled_time) {
+      throw new Error("Choose a site visit start time before scheduling.");
+    }
+
+    if (!draft.crew_id) {
+      throw new Error("Assign a crew before scheduling this site visit.");
+    }
+
+    const durationHours = Number(draft.duration_hours || 0);
+    if (!Number.isFinite(durationHours) || durationHours <= 0) {
+      throw new Error("Choose an estimated duration before scheduling this site visit.");
+    }
+
+    if (isSunday(draft.scheduled_date)) {
+      throw new Error("Site visits cannot be scheduled on Sunday. Please choose another date.");
+    }
+
+    if (isSaturday(draft.scheduled_date) && settings.skipWeekendsByDefault && !settings.allowWeekendOverride) {
+      throw new Error("Saturday scheduling requires an override, and weekend overrides are currently disabled.");
+    }
+
+    const candidateEvents = [buildSiteVisitConflictCandidate(draft)];
+    const existingActiveSiteVisitRow = findActiveSiteVisitScheduleRow(draft.estimateDatabaseId);
+    const existingCalendarEvents = existingActiveSiteVisitRow
+      ? scheduleEvents.filter(event => event.databaseId !== existingActiveSiteVisitRow.id)
+      : scheduleEvents;
+    const conflicts = detectCrewConflicts({
+      candidateEvents,
+      existingEvents: existingCalendarEvents,
+      crews,
+    });
+
+    if (conflicts.length) {
+      const [conflict] = conflicts;
+      const conflictingEvent = conflict.conflictingEvents[0];
+      const crewName = conflict.crew?.name || "the selected crew";
+      throw new Error(
+        `${crewName} is already booked on ${fmtDate(draft.scheduled_date)} for ${conflictingEvent?.customer_name || conflictingEvent?.title || "another scheduled item"}.`
+      );
+    }
+
+    const scheduleNote = `Site visit scheduled for ${draft.scheduled_date}${draft.scheduled_time ? ` at ${normalizeTimeInputValue(draft.scheduled_time)}` : ""}.`;
+    const appendScheduledHistory = currentTicket => ({
+      ...currentTicket,
+      status: "Site Visit Scheduled",
+      workflowStatus: "site_visit_scheduled",
+      followUpNeeded: false,
+      history: appendWorkflowHistoryEntry(currentTicket, "Site Visit Scheduled", scheduleNote),
+    });
+    const mergeScheduledHistory = savedTicket => ({
+      ...savedTicket,
+      history: appendWorkflowHistoryEntry(savedTicket, "Site Visit Scheduled", scheduleNote),
+    });
+
+    if (existingActiveSiteVisitRow) {
+      const refreshedTicket = await syncTicketFromDatabase(draft.estimateDatabaseId);
+
+      if (refreshedTicket?.status === "Site Visit Scheduled" && refreshedTicket.siteVisitAppointment) {
+        await refreshScheduleEvents();
+        return refreshedTicket;
+      }
+
+      const normalizedTicket = appendScheduledHistory(refreshedTicket || ticket);
+      const savedTicket = await updateTicket(normalizedTicket);
+      await refreshScheduleEvents();
+      return mergeScheduledHistory(savedTicket || normalizedTicket);
+    }
+
+    const endTime = addHoursToTime(draft.scheduled_time, durationHours) || null;
+    let createdScheduleRow = null;
+
+    try {
+      createdScheduleRow = await createScheduleEvent({
+        estimate_id: draft.estimateDatabaseId,
+        crew_id: draft.crew_id || null,
+        scheduled_date: draft.scheduled_date,
+        start_time: normalizeTimeInputValue(draft.scheduled_time) || null,
+        end_time: endTime,
+        builder_step: "site_visit",
+        status: "scheduled",
+        notes: draft.notes?.trim() || null,
+      });
+
+      const savedTicket = await updateTicket(appendScheduledHistory(ticket));
+      await refreshScheduleEvents();
+      return mergeScheduledHistory(savedTicket || appendScheduledHistory(ticket));
+    } catch (error) {
+      if (isSiteVisitScheduleUniqueViolation(error)) {
+        await refreshScheduleEvents();
+        const refreshedTicket = await syncTicketFromDatabase(draft.estimateDatabaseId);
+
+        if (refreshedTicket?.status === "Site Visit Scheduled" && refreshedTicket.siteVisitAppointment) {
+          return refreshedTicket;
+        }
+
+        if (refreshedTicket) {
+          const savedTicket = await updateTicket(appendScheduledHistory(refreshedTicket));
+          return savedTicket;
+        }
+      }
+
+      if (createdScheduleRow?.id) {
+        try {
+          await deleteScheduleEvent(createdScheduleRow.id);
+          await refreshScheduleEvents();
+        } catch (cleanupError) {
+          console.error("Unable to roll back site visit calendar event after estimate status update failure:", cleanupError);
+        }
+      }
+
+      throw error;
+    }
+  };
+
   const saveResidentialSchedule = async (draft, conflictOverrideReason = "") => {
     if (!canManageSchedule) return;
     if (!draft.scheduled_date) {
@@ -4180,7 +5053,7 @@ export default function AdminWorkspace({
       });
       const source = tickets.find(ticket => ticket.id === draft.estimateTicketId);
       if (source) {
-        void applyTicketStatus({ ...source }, "Scheduled", `Converted to scheduled residential job${draft.work_order_number ? ` (${draft.work_order_number})` : ""}.`);
+        void applyTicketStatus({ ...source }, "Won", `Converted to scheduled residential job${draft.work_order_number ? ` (${draft.work_order_number})` : ""}.`);
       }
       setScheduleHistory(prev => [{ id: `sch-${Date.now()}`, type: "residential", jobId, note: `Scheduled ${draft.customer_name} for ${draft.scheduled_date}` }, ...prev]);
       if (conflictOverrideReason) {
@@ -4846,7 +5719,20 @@ export default function AdminWorkspace({
   const content = (() => {
     if (selectedTicket) {
       const sourceJob = jobs.find(job => job.sourceTicketId === selectedTicket.id && job.scheduled_date) || null;
-      return <TicketDetailView ticket={selectedTicket} onBack={() => setSelectedTicketId(null)} onUpdateTicket={updateTicket} onOpenSchedule={openResidentialSchedule} sourceJob={sourceJob} />;
+      return (
+        <TicketDetailView
+          ticket={selectedTicket}
+          appRole={appRole}
+          crews={crews}
+          onBack={() => setSelectedTicketId(null)}
+          onRefreshJobs={refreshJobs}
+          onUpdateTicket={updateTicket}
+          onOpenSchedule={openResidentialSchedule}
+          onScheduleSiteVisit={saveSiteVisitSchedule}
+          onViewSiteVisitCalendar={openSiteVisitOnCalendar}
+          sourceJob={sourceJob}
+        />
+      );
     }
     if (selectedCalendarJob) {
       return (
@@ -4935,7 +5821,7 @@ export default function AdminWorkspace({
     }
     if (section === "dashboard") return <DashboardHomeSection tickets={tickets} jobs={jobs} events={allEvents} conflicts={activeConflicts} setSection={navigateToAdminSection} />;
     if (section === "tickets") return <EstimateTicketsSection tickets={tickets} ticketsLoading={ticketsLoading} ticketsError={ticketsError} onSelectTicket={ticket => setSelectedTicketId(ticket.id)} onAcceptTicket={ticket => applyTicketStatus(ticket, "Estimate Accepted", "Estimate accepted and ready for office scheduling.")} onScheduleTicket={openResidentialSchedule} jobs={jobs} scheduledEstimateDatabaseIds={scheduledEstimateDatabaseIds} />;
-    if (section === "calendar") return <CalendarSection events={scheduleEvents} crews={crews} onOpenJob={jobId => setSelectedCalendarJobId(jobId)} pendingResidentialDraft={canManageSchedule ? residentialDraft : null} onPendingResidentialDraftChange={setResidentialDraft} onSavePendingResidentialSchedule={saveResidentialSchedule} onCancelPendingResidentialSchedule={() => { setResidentialDraft(null); setResidentialValidation(null); }} pendingBuilderSchedule={canManageSchedule ? builderScheduleDraft : null} onPendingBuilderScheduleChange={setBuilderScheduleDraft} onSavePendingBuilderSchedule={saveBuilderSchedule} onCancelPendingBuilderSchedule={() => { setBuilderScheduleDraft(null); setBuilderScheduleValidation(null); }} readOnly={calendarReadOnly} loading={scheduleLoading} error={scheduleError} residentialValidation={residentialValidation} onResidentialValidationReset={() => setResidentialValidation(null)} builderValidation={builderScheduleValidation} onBuilderValidationReset={() => setBuilderScheduleValidation(null)} />;
+    if (section === "calendar") return <CalendarSection events={scheduleEvents} crews={crews} onOpenJob={openCalendarRecord} focusDate={calendarFocusDate} pendingResidentialDraft={canManageSchedule ? residentialDraft : null} onPendingResidentialDraftChange={setResidentialDraft} onSavePendingResidentialSchedule={saveResidentialSchedule} onCancelPendingResidentialSchedule={() => { setResidentialDraft(null); setResidentialValidation(null); }} pendingBuilderSchedule={canManageSchedule ? builderScheduleDraft : null} onPendingBuilderScheduleChange={setBuilderScheduleDraft} onSavePendingBuilderSchedule={saveBuilderSchedule} onCancelPendingBuilderSchedule={() => { setBuilderScheduleDraft(null); setBuilderScheduleValidation(null); }} readOnly={calendarReadOnly} loading={scheduleLoading} error={scheduleError} residentialValidation={residentialValidation} onResidentialValidationReset={() => setResidentialValidation(null)} builderValidation={builderScheduleValidation} onBuilderValidationReset={() => setBuilderScheduleValidation(null)} />;
     if (section === "jobs") return <JobsSection jobs={jobs} crews={crews} loading={jobsLoading} error={jobsError} onSelectJob={jobId => setSelectedJobId(jobId)} onCreateBuilderJob={openBuilderJobModal} canCreateBuilderJob={canManageSchedule} />;
     if (section === "customers") return <CustomersSection customers={customers} loading={customersLoading} error={customersError} tickets={tickets} jobs={jobs} onSelectCustomer={openQuickViewForCustomer} search={customerSearch} onSearchChange={setCustomerSearch} typeFilter={customerTypeFilter} onTypeFilterChange={setCustomerTypeFilter} statusFilter={customerStatusFilter} onStatusFilterChange={setCustomerStatusFilter} />;
     if (section === "crews") return <CrewsSection crews={crews} jobs={jobs} onCreateCrew={createCrew} onUpdateCrew={updateCrew} />;

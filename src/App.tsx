@@ -9,6 +9,7 @@ import AdminLogin from "./features/auth/AdminLogin";
 import { canAccessEstimates, isAppRole, type AppRole } from "./features/admin/auth/roles";
 import { useEstimates } from "./features/admin/hooks/useEstimates";
 import EstimatePage from "./features/estimates/EstimatePage";
+import FinalEstimateReviewPage from "./features/estimates/FinalEstimateReviewPage";
 import type { Ticket } from "./features/tickets/ticketTypes";
 import { supabase } from "./lib/supabase";
 import AboutPage from "./pages/AboutPage";
@@ -18,9 +19,28 @@ import HomePage from "./pages/HomePage";
 import ServicesPage from "./pages/ServicesPage";
 import { B } from "./theme";
 
+function getFinalEstimateReviewToken(pathname: string) {
+  const basePath = import.meta.env.BASE_URL || "/";
+  const normalizedBasePath = basePath.endsWith("/")
+    ? basePath.slice(0, -1)
+    : basePath;
+  const routePrefix = `${normalizedBasePath}/estimate/review/`.replace(/\/{2,}/g, "/");
+
+  if (!pathname.startsWith(routePrefix)) {
+    return "";
+  }
+
+  return decodeURIComponent(pathname.slice(routePrefix.length)).trim();
+}
+
 export default function App() {
   const [page, setPage] = useState<PublicPage>("home");
   const [adminMode, setAdminMode] = useState(false);
+  const [publicEstimateReviewToken, setPublicEstimateReviewToken] = useState(() => (
+    typeof window !== "undefined"
+      ? getFinalEstimateReviewToken(window.location.pathname)
+      : ""
+  ));
 
   const [session, setSession] = useState<Session | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -141,12 +161,31 @@ export default function App() {
     };
   }, [sessionUserId]);
 
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return undefined;
+    }
+
+    const syncRoute = () => {
+      setPublicEstimateReviewToken(
+        getFinalEstimateReviewToken(window.location.pathname)
+      );
+    };
+
+    syncRoute();
+    window.addEventListener("popstate", syncRoute);
+
+    return () => {
+      window.removeEventListener("popstate", syncRoute);
+    };
+  }, []);
+
   const handleTicketSubmit = (ticket: Ticket) => {
     addTicket(ticket);
   };
 
   const handleTicketUpdate = async (updated: Ticket) => {
-    await updateTicket(updated);
+    return updateTicket(updated);
   };
 
   const handleLogout = async () => {
@@ -164,6 +203,12 @@ export default function App() {
     setProfileFullName("");
     setRoleError("");
   };
+
+  if (publicEstimateReviewToken) {
+    return (
+      <FinalEstimateReviewPage accessToken={publicEstimateReviewToken} />
+    );
+  }
 
   if (adminMode) {
     if (authLoading) {

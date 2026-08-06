@@ -57,6 +57,7 @@ function throwScheduleServiceError(context: string, error: unknown): never {
 const SCHEDULE_SELECT_WITH_PURCHASE_ORDER = `
   id,
   job_id,
+  estimate_id,
   crew_id,
   scheduled_date,
   start_time,
@@ -99,6 +100,27 @@ const SCHEDULE_SELECT_WITH_PURCHASE_ORDER = `
       notes
     )
   ),
+  estimate:estimates!schedule_events_estimate_id_fkey (
+    id,
+    customer_id,
+    job_address,
+    job_type,
+    description,
+    customer:customers!estimates_customer_id_fkey (
+      id,
+      first_name,
+      last_name,
+      company_name,
+      phone,
+      email,
+      street_address,
+      city,
+      state,
+      zip_code,
+      customer_type,
+      notes
+    )
+  ),
   crew:crews!schedule_events_crew_id_fkey (
     id,
     crew_number,
@@ -110,6 +132,7 @@ const SCHEDULE_SELECT_WITH_PURCHASE_ORDER = `
 const SCHEDULE_SELECT_LEGACY = `
   id,
   job_id,
+  estimate_id,
   crew_id,
   scheduled_date,
   start_time,
@@ -137,6 +160,27 @@ const SCHEDULE_SELECT_LEGACY = `
     community,
     lot_number,
     customer:customers!jobs_customer_id_fkey (
+      id,
+      first_name,
+      last_name,
+      company_name,
+      phone,
+      email,
+      street_address,
+      city,
+      state,
+      zip_code,
+      customer_type,
+      notes
+    )
+  ),
+  estimate:estimates!schedule_events_estimate_id_fkey (
+    id,
+    customer_id,
+    job_address,
+    job_type,
+    description,
+    customer:customers!estimates_customer_id_fkey (
       id,
       first_name,
       last_name,
@@ -248,6 +292,19 @@ export async function updateScheduleEvent(eventId: string, payload: ScheduleEven
   }
 
   return fetchScheduleEventById(eventId);
+}
+
+export async function deleteScheduleEvent(eventId: string) {
+  const { error } = await supabase
+    .from("schedule_events")
+    .delete()
+    .eq("id", eventId)
+    .select("id")
+    .single();
+
+  if (error) {
+    throwScheduleServiceError(`Unable to delete calendar event ${eventId}`, error);
+  }
 }
 
 export async function findJobIdByEstimateId(estimateId: string) {

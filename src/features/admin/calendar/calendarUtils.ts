@@ -44,6 +44,27 @@ function normalizeTimeValue(value: string | null | undefined) {
   return value.slice(0, 5);
 }
 
+function getSiteVisitCapacityUsed(row: DatabaseScheduleEventRow) {
+  const startValue = normalizeTimeValue(row.start_time);
+  const endValue = row.end_time ? row.end_time.slice(0, 5) : "";
+
+  if (!endValue) {
+    return 0.25;
+  }
+
+  const startHours = Number(startValue.slice(0, 2));
+  const startMinutes = Number(startValue.slice(3, 5));
+  const endHours = Number(endValue.slice(0, 2));
+  const endMinutes = Number(endValue.slice(3, 5));
+  const durationHours = ((endHours * 60) + endMinutes - ((startHours * 60) + startMinutes)) / 60;
+
+  if (!Number.isFinite(durationHours) || durationHours <= 0) {
+    return 0.25;
+  }
+
+  return Math.min(Math.max(Number((durationHours / 8).toFixed(2)), 0.25), 1);
+}
+
 function formatCustomerName(customer: DatabaseScheduleCustomerRow | null) {
   if (!customer) {
     return "";
@@ -54,12 +75,12 @@ function formatCustomerName(customer: DatabaseScheduleCustomerRow | null) {
 }
 
 function formatAddress(row: DatabaseScheduleEventRow) {
-  const customer = row.job?.customer;
+  const customer = row.job?.customer || row.estimate?.customer || null;
   const customerAddress = [customer?.street_address, customer?.city, customer?.state, customer?.zip_code]
     .filter(Boolean)
     .join(", ");
 
-  return row.job?.job_address || customerAddress;
+  return row.job?.job_address || row.estimate?.job_address || customerAddress;
 }
 
 function getBuilderName(row: DatabaseScheduleEventRow) {
@@ -72,11 +93,15 @@ function getDisplayTitle(row: DatabaseScheduleEventRow, scheduleType: ScheduleTy
     return `${getBuilderName(row)} - ${phaseLabel}`;
   }
 
+  if (scheduleType === "site_visit") {
+    return `Site Visit - ${formatCustomerName(row.estimate?.customer || null) || "Estimate"}`;
+  }
+
   return `${formatCustomerName(row.job?.customer || null) || row.job?.job_name || "Scheduled Job"} - ${row.job?.job_type || "Job"}`;
 }
 
 function isBuilderStep(step: string | null | undefined) {
-  return !!step && step !== "residential_job";
+  return !!step && step !== "residential_job" && step !== "site_visit";
 }
 
 export function toUiBuilderPhaseKey(builderStep: string | null | undefined) {
@@ -131,10 +156,18 @@ export function calendarStatusToDatabaseStatus(status: string | null | undefined
 }
 
 export function getScheduleTypeFromRow(row: DatabaseScheduleEventRow): ScheduleType {
+  if (row.builder_step === "site_visit" || (row.estimate_id && !row.job_id)) {
+    return "site_visit";
+  }
+
   return isBuilderStep(row.builder_step) ? "builder_slab" : "residential";
 }
 
 export function getSchedulePhaseLabel(builderStep: string | null | undefined) {
+  if (builderStep === "site_visit") {
+    return "Site Visit";
+  }
+
   const normalizedBuilderStep = toUiBuilderPhaseKey(builderStep);
 
   if (!normalizedBuilderStep) {
@@ -177,6 +210,10 @@ function getBuilderColor(builderName: string) {
 }
 
 function getCalendarJobId(row: DatabaseScheduleEventRow) {
+  if (getScheduleTypeFromRow(row) === "site_visit") {
+    return row.estimate_id ? `site_visit:${row.estimate_id}` : `site_visit:${row.id}`;
+  }
+
   return getScheduleTypeFromRow(row) === "builder_slab"
     ? row.job_id
     : `${row.job_id}:${row.id}`;
@@ -202,9 +239,15 @@ export function databaseScheduleRowToCalendarEvent(row: DatabaseScheduleEventRow
   const scheduleType = getScheduleTypeFromRow(row);
   const phaseLabel = scheduleType === "builder_slab"
     ? getSchedulePhaseLabel(row.builder_step)
-    : "Scheduled Work";
+    : scheduleType === "site_visit"
+      ? "Site Visit"
+      : "Scheduled Work";
   const builderName = scheduleType === "builder_slab" ? getBuilderName(row) : "";
-  const customerName = scheduleType === "residential" ? (formatCustomerName(row.job?.customer || null) || row.job?.job_name || "") : "";
+  const customerName = scheduleType === "residential"
+    ? (formatCustomerName(row.job?.customer || null) || row.job?.job_name || "")
+    : scheduleType === "site_visit"
+      ? formatCustomerName(row.estimate?.customer || null)
+      : "";
   const color = scheduleType === "builder_slab"
     ? getBuilderColor(builderName)
     : RESIDENTIAL_EVENT_COLOR;
@@ -213,13 +256,14 @@ export function databaseScheduleRowToCalendarEvent(row: DatabaseScheduleEventRow
     id: row.id,
     databaseId: row.id,
     jobId: getCalendarJobId(row),
+    estimate_database_id: row.estimate_id || row.job?.estimate_id || "",
     phaseId: scheduleType === "builder_slab" ? row.id : "",
     schedule_type: scheduleType,
-    type_label: scheduleType === "builder_slab" ? "Builder" : "Residential",
+    type_label: scheduleType === "builder_slab" ? "Builder" : scheduleType === "site_visit" ? "Site Visit" : "Residential",
     title: getDisplayTitle(row, scheduleType, phaseLabel),
     customer_name: customerName,
     builder_name: builderName,
-    job_type: row.job?.job_type || "",
+    job_type: scheduleType === "site_visit" ? (row.estimate?.job_type || "Site Visit") : (row.job?.job_type || ""),
     address: formatAddress(row),
     community: row.job?.community || "",
     lot_number: row.job?.lot_number || "",
@@ -231,12 +275,14 @@ export function databaseScheduleRowToCalendarEvent(row: DatabaseScheduleEventRow
     end_time: row.end_time ? row.end_time.slice(0, 5) : "",
     crew_id: row.crew_id || "",
     crew_number: row.crew?.crew_number || "",
-    capacity_used: getCountsTowardCrew(row.builder_step, row.crew_id) ? 1 : 0,
+    capacity_used: scheduleType === "site_visit"
+      ? getSiteVisitCapacityUsed(row)
+      : getCountsTowardCrew(row.builder_step, row.crew_id) ? 1 : 0,
     counts_toward_crew: getCountsTowardCrew(row.builder_step, row.crew_id),
     status: databaseStatusToCalendarStatus(row.status),
     phase_label: phaseLabel,
     color,
-    notes: row.notes || row.job?.notes || "",
+    notes: row.notes || row.job?.notes || row.estimate?.description || "",
   };
 }
 
@@ -374,9 +420,14 @@ export function buildScheduleCalendarJobs(rows: DatabaseScheduleEventRow[]) {
   const jobs: ScheduleCalendarJob[] = [];
 
   sortScheduleRows(rows).forEach((row) => {
+    if (getScheduleTypeFromRow(row) === "site_visit") {
+      return;
+    }
+
     if (getScheduleTypeFromRow(row) === "builder_slab") {
-      const existingRows = builderGroups.get(row.job_id) || [];
-      builderGroups.set(row.job_id, [...existingRows, row]);
+      const groupKey = row.job_id || row.id;
+      const existingRows = builderGroups.get(groupKey) || [];
+      builderGroups.set(groupKey, [...existingRows, row]);
       return;
     }
 

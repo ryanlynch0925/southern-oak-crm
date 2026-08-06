@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   createScheduleEvent,
+  deleteScheduleEvent,
   fetchScheduleEvents,
   findJobIdByEstimateId,
   updateScheduleEvent,
@@ -65,6 +66,12 @@ export function useScheduleEvents(enabled: boolean) {
     return savedRow;
   }, []);
 
+  const deleteEvent = useCallback(async (eventId: string) => {
+    await deleteScheduleEvent(eventId);
+    setRows((previousRows) => previousRows.filter((row) => row.id !== eventId));
+    setError("");
+  }, []);
+
   const events = useMemo(
     () => sortCalendarEvents(rows.map(databaseScheduleRowToCalendarEvent)),
     [rows]
@@ -84,6 +91,7 @@ export function useScheduleEvents(enabled: boolean) {
     refreshScheduleEvents,
     createEvent,
     updateEvent,
+    deleteEvent,
     findJobIdByEstimateId,
   };
 }

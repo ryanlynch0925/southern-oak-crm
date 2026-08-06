@@ -1,4 +1,8 @@
 import type { EstimateDecisionKey } from "../estimates/estimateTypes";
+import type {
+  FinalEstimateDraft,
+  FinalEstimatePublicationSummary,
+} from "../estimates/finalEstimateTypes";
 
 export const STATUS_STYLES = {
   "New Request": { c: "#1A5276", bg: "#D6EAF8" },
@@ -9,6 +13,8 @@ export const STATUS_STYLES = {
   "Follow Up Needed": { c: "#9C640C", bg: "#FCF3CF" },
   Declined: { c: "#7B7D7D", bg: "#F2F3F4" },
   "Site Visit Needed": { c: "#922B21", bg: "#FADBD8" },
+  "Site Visit Scheduled": { c: "#1A5632", bg: "#D5F5E3" },
+  "Site Visit Completed": { c: "#1F618D", bg: "#D6EAF8" },
   Scheduled: { c: "#1A5632", bg: "#D5F5E3" },
   "Final Quote Sent": { c: "#1B4F72", bg: "#D6EAF8" },
   "Estimate Accepted": { c: "#1A5632", bg: "#D5F5E3" },
@@ -40,6 +46,22 @@ export interface TicketNotification {
   createdAt: string;
 }
 
+export interface SiteVisitAppointment {
+  eventId: string;
+  estimateDatabaseId: string;
+  customerName: string;
+  projectAddress: string;
+  projectType: string;
+  scheduledDate: string;
+  startTime: string;
+  endTime: string;
+  crewId: string;
+  crewLabel: string;
+  notes: string;
+  status: string;
+  createdAt: string;
+}
+
 export interface Ticket {
   id: string;
   databaseId?: string;
@@ -50,6 +72,11 @@ export interface Ticket {
   email: string;
   addr: string;
   city: string;
+  jobAddress?: string;
+  customerStreetAddress?: string;
+  customerCity?: string;
+  customerState?: string;
+  customerZip?: string;
   ptype: string;
   len: number;
   wid: number;
@@ -65,6 +92,9 @@ export interface Ticket {
   rHigh: number | null;
   quote: number | null;
   status: TicketStatus;
+  workflowStatus?: string | null;
+  customerStatus?: string | null;
+  followUpNeeded?: boolean;
   followUp: string;
   files: string[];
   history: TicketHistoryEntry[];
@@ -76,4 +106,7 @@ export interface Ticket {
   decisionFeedbackReason?: string;
   decisionFeedbackComment?: string;
   notifications?: TicketNotification[];
+  finalEstimateDraft?: FinalEstimateDraft;
+  finalEstimatePublications?: FinalEstimatePublicationSummary[];
+  siteVisitAppointment?: SiteVisitAppointment | null;
 }

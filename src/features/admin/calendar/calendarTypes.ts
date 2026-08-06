@@ -5,6 +5,12 @@ export type DatabaseScheduleStatus =
   | "delayed"
   | "cancelled";
 
+export const ACTIVE_SITE_VISIT_DATABASE_STATUSES: DatabaseScheduleStatus[] = [
+  "scheduled",
+  "in_progress",
+  "delayed",
+];
+
 export type CalendarUiStatus =
   | "Scheduled"
   | "In Progress"
@@ -14,7 +20,7 @@ export type CalendarUiStatus =
   | "Ready to Schedule"
   | "Pending";
 
-export type ScheduleType = "residential" | "builder_slab";
+export type ScheduleType = "residential" | "builder_slab" | "site_visit";
 
 export interface DatabaseScheduleCustomerRow {
   id: string;
@@ -48,6 +54,15 @@ export interface DatabaseScheduleJobRow {
   customer: DatabaseScheduleCustomerRow | null;
 }
 
+export interface DatabaseScheduleEstimateRow {
+  id: string;
+  customer_id: string;
+  job_address: string | null;
+  job_type: string | null;
+  description: string | null;
+  customer: DatabaseScheduleCustomerRow | null;
+}
+
 export interface DatabaseScheduleCrewRow {
   id: string;
   crew_number: string;
@@ -57,7 +72,8 @@ export interface DatabaseScheduleCrewRow {
 
 export interface DatabaseScheduleEventRow {
   id: string;
-  job_id: string;
+  job_id: string | null;
+  estimate_id: string | null;
   crew_id: string | null;
   scheduled_date: string;
   start_time: string | null;
@@ -72,6 +88,7 @@ export interface DatabaseScheduleEventRow {
   created_at: string;
   updated_at: string | null;
   job: DatabaseScheduleJobRow | null;
+  estimate: DatabaseScheduleEstimateRow | null;
   crew: DatabaseScheduleCrewRow | null;
 }
 
@@ -79,6 +96,7 @@ export interface CalendarEvent {
   id: string;
   databaseId: string;
   jobId: string;
+  estimate_database_id?: string;
   phaseId: string;
   schedule_type: ScheduleType;
   type_label: string;
@@ -155,6 +173,7 @@ export interface ScheduleCalendarJob {
 
 export interface ScheduleEventWritePayload {
   job_id?: string;
+  estimate_id?: string;
   crew_id?: string | null;
   scheduled_date?: string;
   start_time?: string | null;

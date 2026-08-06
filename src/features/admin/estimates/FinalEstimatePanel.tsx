@@ -20,8 +20,25 @@ import {
   getFinalEstimateExpirationInputValue,
 } from "../../estimates/finalEstimateTypes";
 import type { Ticket } from "../../tickets/ticketTypes";
+import {
+  EXCLUSION_TEMPLATE_SELECT_OPTIONS,
+  FINAL_ESTIMATE_CUSTOM_TEMPLATE_ID,
+  FINAL_ESTIMATE_TEMPLATE_HELPER_TEXT,
+  getDefaultPaymentTermsText,
+  getExclusionTemplateText,
+  getPaymentTermsTemplateText,
+  getSchedulingTemplateText,
+  getScopeTemplateSelectOptions,
+  getScopeTemplateText,
+  PAYMENT_TEMPLATE_SELECT_OPTIONS,
+  SCHEDULING_TEMPLATE_SELECT_OPTIONS,
+} from "./finalEstimateTemplates";
 
 type DraftErrors = Partial<Record<keyof FinalEstimateDraft, string>>;
+
+type TemplateSelectionKey = "scopeDescription" | "paymentTerms" | "schedulingTerms" | "exclusions";
+
+type TemplateSelections = Record<TemplateSelectionKey, string>;
 
 const EMPTY_FINAL_ESTIMATE_DRAFT: FinalEstimateDraft = {
   customerName: "",
@@ -36,6 +53,13 @@ const EMPTY_FINAL_ESTIMATE_DRAFT: FinalEstimateDraft = {
   schedulingTerms: "",
   exclusions: "",
   expiresAt: "",
+};
+
+const DEFAULT_TEMPLATE_SELECTIONS: TemplateSelections = {
+  scopeDescription: FINAL_ESTIMATE_CUSTOM_TEMPLATE_ID,
+  paymentTerms: FINAL_ESTIMATE_CUSTOM_TEMPLATE_ID,
+  schedulingTerms: FINAL_ESTIMATE_CUSTOM_TEMPLATE_ID,
+  exclusions: FINAL_ESTIMATE_CUSTOM_TEMPLATE_ID,
 };
 
 function fmtMoney(value: number | null | undefined) {
@@ -290,8 +314,11 @@ export default function FinalEstimatePanel({
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isRevoking, setIsRevoking] = useState(false);
   const [showPublishConfirm, setShowPublishConfirm] = useState(false);
+  const [showClearExclusionsConfirm, setShowClearExclusionsConfirm] = useState(false);
   const [revokeTarget, setRevokeTarget] = useState<FinalEstimatePublicationSummary | null>(null);
   const [publicationLinks, setPublicationLinks] = useState<Record<string, string>>({});
+  const [templateSelections, setTemplateSelections] = useState<TemplateSelections>(DEFAULT_TEMPLATE_SELECTIONS);
+  const [templateFeedback, setTemplateFeedback] = useState("");
   const projectAddressDirtyRef = useRef(false);
 
   const estimateIdentity = ticket.databaseId || ticket.id;
@@ -323,9 +350,18 @@ export default function FinalEstimatePanel({
   const hasActivePublishedPublication = publications.some((publication) => (
     getEffectiveFinalEstimateStatus(publication.status, publication.expiresAt) === "published"
   ));
+  const scopeTemplateOptions = useMemo(
+    () => getScopeTemplateSelectOptions(displayDraft.projectType),
+    [displayDraft.projectType]
+  );
 
   useEffect(() => {
     projectAddressDirtyRef.current = false;
+  }, [estimateIdentity]);
+
+  useEffect(() => {
+    setTemplateSelections(DEFAULT_TEMPLATE_SELECTIONS);
+    setTemplateFeedback("");
   }, [estimateIdentity]);
 
   useEffect(() => {
@@ -420,25 +456,209 @@ export default function FinalEstimatePanel({
 
   const readyForInvoicePublication = acceptedPublication;
 
+  const applyDraftPatch = (
+    patch: Partial<FinalEstimateDraft>,
+    options?: {
+      clearMessages?: boolean;
+      clearErrors?: boolean;
+    }
+  ) => {
+    setTicket((current) => {
+      const currentDraft = sanitizeDraft(current.finalEstimateDraft || draft);
+      const currentGeneratedPaymentTerms = getDefaultPaymentTermsText(
+        currentDraft.depositType,
+        currentDraft.depositValue
+      );
+      const nextDraft = sanitizeDraft({
+        ...currentDraft,
+        ...patch,
+      });
+      const nextGeneratedPaymentTerms = getDefaultPaymentTermsText(
+        nextDraft.depositType,
+        nextDraft.depositValue
+      );
+      const depositSettingsChanged = Object.prototype.hasOwnProperty.call(patch, "depositType")
+        || Object.prototype.hasOwnProperty.call(patch, "depositValue");
+      const paymentTermsPatched = Object.prototype.hasOwnProperty.call(patch, "paymentTerms");
+
+      if (
+        depositSettingsChanged
+        && !paymentTermsPatched
+        && (
+          !currentDraft.paymentTerms.trim()
+          || currentDraft.paymentTerms.trim() === currentGeneratedPaymentTerms.trim()
+        )
+      ) {
+        nextDraft.paymentTerms = nextGeneratedPaymentTerms;
+      }
+
+      return {
+        ...current,
+        finalEstimateDraft: nextDraft,
+      };
+    });
+
+    if (options?.clearErrors !== false) {
+      setDraftErrors((current) => {
+        const nextErrors = { ...current };
+
+        for (const key of Object.keys(patch) as Array<keyof FinalEstimateDraft>) {
+          nextErrors[key] = "";
+        }
+
+        return nextErrors;
+      });
+    }
+
+    if (options?.clearMessages !== false) {
+      setPublishError("");
+      setPublishSuccess("");
+      setCopyFeedback("");
+      setRevokeError("");
+      setTemplateFeedback("");
+    }
+  };
+
   const updateDraft = <K extends keyof FinalEstimateDraft>(
     key: K,
     value: FinalEstimateDraft[K]
   ) => {
-    setTicket((current) => ({
+    applyDraftPatch({ [key]: value } as Partial<FinalEstimateDraft>);
+  };
+
+  const setTemplateSelection = (
+    key: TemplateSelectionKey,
+    templateId: string
+  ) => {
+    setTemplateSelections((current) => ({
       ...current,
-      finalEstimateDraft: {
-        ...sanitizeDraft(current.finalEstimateDraft || draft),
-        [key]: value,
-      },
+      [key]: templateId,
     }));
-    setDraftErrors((current) => ({
-      ...current,
-      [key]: "",
-    }));
-    setPublishError("");
-    setPublishSuccess("");
-    setCopyFeedback("");
-    setRevokeError("");
+  };
+
+  const applyScopeTemplate = (templateId: string) => {
+    setTemplateSelection("scopeDescription", templateId);
+
+    if (templateId === FINAL_ESTIMATE_CUSTOM_TEMPLATE_ID) {
+      setTemplateFeedback("");
+      return;
+    }
+
+    const templateText = getScopeTemplateText(templateId);
+
+    if (!templateText) {
+      return;
+    }
+
+    applyDraftPatch({ scopeDescription: templateText });
+  };
+
+  const applyPaymentTermsTemplate = (templateId: string) => {
+    setTemplateSelection("paymentTerms", templateId);
+
+    if (templateId === FINAL_ESTIMATE_CUSTOM_TEMPLATE_ID) {
+      setTemplateFeedback("");
+      return;
+    }
+
+    if (templateId === "deposit_25_percent") {
+      applyDraftPatch({
+        depositType: "percentage",
+        depositValue: 25,
+        paymentTerms: getPaymentTermsTemplateText(templateId, "percentage", 25) || "",
+      });
+      return;
+    }
+
+    if (templateId === "deposit_50_percent") {
+      applyDraftPatch({
+        depositType: "percentage",
+        depositValue: 50,
+        paymentTerms: getPaymentTermsTemplateText(templateId, "percentage", 50) || "",
+      });
+      return;
+    }
+
+    if (templateId === "no_deposit") {
+      applyDraftPatch({
+        depositType: "none",
+        depositValue: null,
+        paymentTerms: getPaymentTermsTemplateText(templateId, "none", null) || "",
+      });
+      return;
+    }
+
+    const templateText = getPaymentTermsTemplateText(
+      templateId,
+      draft.depositType,
+      draft.depositValue
+    );
+
+    if (!templateText) {
+      setTemplateFeedback("Enter a valid fixed deposit amount before applying the Fixed Deposit payment template.");
+      setTemplateSelection("paymentTerms", FINAL_ESTIMATE_CUSTOM_TEMPLATE_ID);
+      return;
+    }
+
+    applyDraftPatch({
+      depositType: "fixed",
+      paymentTerms: templateText,
+    });
+  };
+
+  const applySchedulingTemplate = (templateId: string) => {
+    setTemplateSelection("schedulingTerms", templateId);
+
+    if (templateId === FINAL_ESTIMATE_CUSTOM_TEMPLATE_ID) {
+      setTemplateFeedback("");
+      return;
+    }
+
+    const templateText = getSchedulingTemplateText(templateId);
+
+    if (!templateText) {
+      return;
+    }
+
+    applyDraftPatch({ schedulingTerms: templateText });
+  };
+
+  const applyExclusionTemplate = (templateId: string) => {
+    if (isAcceptedFinalEstimateLocked) {
+      return;
+    }
+
+    if (templateId === "no_standard_exclusions") {
+      setShowClearExclusionsConfirm(true);
+      return;
+    }
+
+    setTemplateSelection("exclusions", templateId);
+
+    if (templateId === FINAL_ESTIMATE_CUSTOM_TEMPLATE_ID) {
+      setTemplateFeedback("");
+      return;
+    }
+
+    const templateText = getExclusionTemplateText(templateId);
+
+    if (templateText == null) {
+      return;
+    }
+
+    applyDraftPatch({ exclusions: templateText });
+  };
+
+  const confirmClearExclusions = () => {
+    if (isAcceptedFinalEstimateLocked) {
+      setShowClearExclusionsConfirm(false);
+      return;
+    }
+
+    setTemplateSelection("exclusions", "no_standard_exclusions");
+    setTemplateFeedback("");
+    applyDraftPatch({ exclusions: "" });
+    setShowClearExclusionsConfirm(false);
   };
 
   const refreshTicket = async () => {
@@ -602,7 +822,7 @@ export default function FinalEstimatePanel({
         </div>
       </div>
 
-      {(publishError || publishSuccess || copyFeedback || revokeError) && (
+      {(publishError || publishSuccess || copyFeedback || revokeError || templateFeedback) && (
         <div
           style={{
             borderRadius: 10,
@@ -612,7 +832,9 @@ export default function FinalEstimatePanel({
               ? "#FFF7F5"
               : publishSuccess
                 ? "#E6F3EA"
-                : "#F7F4EC",
+                : templateFeedback
+                  ? "#F7F4EC"
+                  : "#F7F4EC",
             border: `1px solid ${publishError || revokeError ? "#E5C3BD" : publishSuccess ? "#BED9C5" : B.border}`,
             color: publishError || revokeError
               ? "#922B21"
@@ -624,7 +846,7 @@ export default function FinalEstimatePanel({
             whiteSpace: copyFeedback.startsWith("http") ? "pre-wrap" : "normal",
           }}
         >
-          {publishError || revokeError || publishSuccess || copyFeedback}
+          {publishError || revokeError || publishSuccess || copyFeedback || templateFeedback}
         </div>
       )}
 
@@ -676,6 +898,20 @@ export default function FinalEstimatePanel({
           <input style={INP} value={displayDraft.projectType} readOnly={isAcceptedFinalEstimateLocked} onChange={(event) => updateDraft("projectType", event.target.value)} />
         </div>
         <div style={{ gridColumn: "1 / -1" }}>
+          <label style={{ display: "block", fontSize: ".72rem", fontWeight: 700, color: B.dark, marginBottom: 4 }}>Scope Template</label>
+          <select
+            style={{ ...INP, marginBottom: 4 }}
+            value={templateSelections.scopeDescription}
+            disabled={isAcceptedFinalEstimateLocked}
+            onChange={(event) => applyScopeTemplate(event.target.value)}
+          >
+            {scopeTemplateOptions.map((option) => (
+              <option key={option.id} value={option.id}>{option.label}</option>
+            ))}
+          </select>
+          <div style={{ fontSize: ".7rem", color: B.gray, marginBottom: 8 }}>
+            {FINAL_ESTIMATE_TEMPLATE_HELPER_TEXT}
+          </div>
           <label style={{ display: "block", fontSize: ".76rem", fontWeight: 700, color: B.dark, marginBottom: 4 }}>Scope Description *</label>
           <textarea
             style={{ ...INP, minHeight: 110, resize: "vertical", borderColor: draftErrors.scopeDescription ? "#922B21" : B.border }}
@@ -739,6 +975,20 @@ export default function FinalEstimatePanel({
           {draftErrors.depositValue && <div style={{ marginTop: 5, fontSize: ".72rem", color: "#922B21" }}>{draftErrors.depositValue}</div>}
         </div>
         <div style={{ gridColumn: "1 / -1" }}>
+          <label style={{ display: "block", fontSize: ".72rem", fontWeight: 700, color: B.dark, marginBottom: 4 }}>Payment Terms Template</label>
+          <select
+            style={{ ...INP, marginBottom: 4 }}
+            value={templateSelections.paymentTerms}
+            disabled={isAcceptedFinalEstimateLocked}
+            onChange={(event) => applyPaymentTermsTemplate(event.target.value)}
+          >
+            {PAYMENT_TEMPLATE_SELECT_OPTIONS.map((option) => (
+              <option key={option.id} value={option.id}>{option.label}</option>
+            ))}
+          </select>
+          <div style={{ fontSize: ".7rem", color: B.gray, marginBottom: 8 }}>
+            {FINAL_ESTIMATE_TEMPLATE_HELPER_TEXT}
+          </div>
           <label style={{ display: "block", fontSize: ".76rem", fontWeight: 700, color: B.dark, marginBottom: 4 }}>Payment Terms *</label>
           <textarea
             style={{ ...INP, minHeight: 90, resize: "vertical", borderColor: draftErrors.paymentTerms ? "#922B21" : B.border }}
@@ -749,10 +999,38 @@ export default function FinalEstimatePanel({
           {draftErrors.paymentTerms && <div style={{ marginTop: 5, fontSize: ".72rem", color: "#922B21" }}>{draftErrors.paymentTerms}</div>}
         </div>
         <div style={{ gridColumn: "1 / -1" }}>
+          <label style={{ display: "block", fontSize: ".72rem", fontWeight: 700, color: B.dark, marginBottom: 4 }}>Scheduling Template</label>
+          <select
+            style={{ ...INP, marginBottom: 4 }}
+            value={templateSelections.schedulingTerms}
+            disabled={isAcceptedFinalEstimateLocked}
+            onChange={(event) => applySchedulingTemplate(event.target.value)}
+          >
+            {SCHEDULING_TEMPLATE_SELECT_OPTIONS.map((option) => (
+              <option key={option.id} value={option.id}>{option.label}</option>
+            ))}
+          </select>
+          <div style={{ fontSize: ".7rem", color: B.gray, marginBottom: 8 }}>
+            {FINAL_ESTIMATE_TEMPLATE_HELPER_TEXT}
+          </div>
           <label style={{ display: "block", fontSize: ".76rem", fontWeight: 700, color: B.dark, marginBottom: 4 }}>Scheduling Terms</label>
           <textarea style={{ ...INP, minHeight: 80, resize: "vertical" }} value={displayDraft.schedulingTerms} readOnly={isAcceptedFinalEstimateLocked} onChange={(event) => updateDraft("schedulingTerms", event.target.value)} />
         </div>
         <div style={{ gridColumn: "1 / -1" }}>
+          <label style={{ display: "block", fontSize: ".72rem", fontWeight: 700, color: B.dark, marginBottom: 4 }}>Exclusions Template</label>
+          <select
+            style={{ ...INP, marginBottom: 4 }}
+            value={templateSelections.exclusions}
+            disabled={isAcceptedFinalEstimateLocked}
+            onChange={(event) => applyExclusionTemplate(event.target.value)}
+          >
+            {EXCLUSION_TEMPLATE_SELECT_OPTIONS.map((option) => (
+              <option key={option.id} value={option.id}>{option.label}</option>
+            ))}
+          </select>
+          <div style={{ fontSize: ".7rem", color: B.gray, marginBottom: 8 }}>
+            {FINAL_ESTIMATE_TEMPLATE_HELPER_TEXT}
+          </div>
           <label style={{ display: "block", fontSize: ".76rem", fontWeight: 700, color: B.dark, marginBottom: 4 }}>Exclusions</label>
           <textarea style={{ ...INP, minHeight: 80, resize: "vertical" }} value={displayDraft.exclusions} readOnly={isAcceptedFinalEstimateLocked} onChange={(event) => updateDraft("exclusions", event.target.value)} />
         </div>
@@ -865,6 +1143,22 @@ export default function FinalEstimatePanel({
               <Btn sm v="outline" onClick={() => setShowPublishConfirm(false)} disabled={isPublishing}>Cancel</Btn>
               <Btn sm v="green" onClick={() => { void confirmPublish(); }} disabled={isPublishing}>
                 {isPublishing ? "Publishing..." : "Confirm Publish"}
+              </Btn>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {showClearExclusionsConfirm && (
+        <Modal title="Clear Exclusions?" onClose={() => setShowClearExclusionsConfirm(false)} width={620}>
+          <div style={{ display: "grid", gap: 14 }}>
+            <div style={{ fontSize: ".84rem", color: B.gray, lineHeight: 1.6 }}>
+              This will remove the current exclusions wording from the final estimate. You can add custom exclusions afterward.
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+              <Btn sm v="outline" onClick={() => setShowClearExclusionsConfirm(false)}>Cancel</Btn>
+              <Btn sm v="danger" onClick={confirmClearExclusions}>
+                Clear Exclusions
               </Btn>
             </div>
           </div>

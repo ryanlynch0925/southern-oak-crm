@@ -179,10 +179,6 @@ export default function TicketDetail({ ticket, onBack, onUpdate }: TicketDetailP
                 <div style={{fontSize:".72rem",color:B.gray,marginBottom:2}}>Rough estimate range</div>
                 <div style={{fontWeight:700,color:B.dark,fontSize:"1rem"}}>{fmtRange(t.rLow,t.rHigh)}</div>
               </div>
-              <div style={{marginBottom:10}}>
-                <label style={{display:"block",fontSize:".76rem",fontWeight:700,color:B.dark,marginBottom:4}}>Final quote amount</label>
-                <input style={INP} type="number" placeholder="e.g. 8500" value={t.quote||""} onChange={e=>setT(prev=>({...prev,quote:e.target.value?parseFloat(e.target.value):null}))}/>
-              </div>
               <div>
                 <label style={{display:"block",fontSize:".76rem",fontWeight:700,color:B.dark,marginBottom:4}}>Follow-up date</label>
                 <input style={INP} type="date" value={t.followUp||""} onChange={e=>setT(prev=>({...prev,followUp:e.target.value}))}/>

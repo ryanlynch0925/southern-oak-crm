@@ -12,6 +12,14 @@ import { ACTIVE_SITE_VISIT_DATABASE_STATUSES } from "./features/admin/calendar/c
 import { calendarStatusToDatabaseStatus, databaseStatusToCalendarStatus, toDatabaseBuilderStep, toUiBuilderPhaseKey } from "./features/admin/calendar/calendarUtils";
 import CrewsSection from "./features/admin/crews/CrewsSection";
 import FinalEstimatePanel from "./features/admin/estimates/FinalEstimatePanel";
+import {
+  getEstimateStatusDisplayLabel,
+  getEstimateWorkflowQuickAction,
+  getEstimateWorkflowStageDefinition,
+  getEstimateWorkflowStageDefinitions,
+  getEstimateWorkflowStatusFilterOptions,
+  resolveEffectiveEstimateWorkflowStage,
+} from "./features/admin/estimates/estimateWorkflow";
 import { databaseEstimateToTicket, mapTicketStatusToWorkflowStatus } from "./features/admin/estimates/estimateUtils";
 import { appCrewToDatabaseCrew, databaseCrewToAppCrew, normalizeCrew } from "./features/admin/crews/crewMappers";
 import { buildBuilderEvents, buildCalendarEvents, buildResidentialEvents, findCrewById, getCrewNumber } from "./features/admin/crews/crewUtils";
@@ -159,28 +167,6 @@ function FormValidationMessage({ message, id, style = {} }) {
   );
 }
 
-const ESTIMATE_STATUSES = [
-  "New Request",
-  "Needs Review",
-  "Rough Estimate Sent",
-  "Interested",
-  "Site Visit Requested",
-  "Follow Up Needed",
-  "Declined",
-  "Site Visit Needed",
-  "Site Visit Scheduled",
-  "Site Visit Completed",
-  "Final Quote Sent",
-  "Estimate Accepted",
-  "Ready to Schedule",
-  "Won",
-  "Lost",
-];
-
-const SELECTABLE_ESTIMATE_STATUSES = ESTIMATE_STATUSES.filter(
-  status => status !== "Estimate Accepted"
-);
-
 const JOB_STATUSES = [
   "Estimate Accepted",
   "Ready to Schedule",
@@ -222,6 +208,10 @@ const DECISION_STYLES = {
   no: { label: "No / Follow Up Needed", short: "No", c: "#9C640C", bg: "#FCF3CF" },
   pending: { label: "Awaiting decision", short: "Pending", c: "#5F645D", bg: "#F3F4F2" },
 };
+
+const ESTIMATE_WORKFLOW_FILTER_OPTIONS = getEstimateWorkflowStatusFilterOptions();
+const PRIMARY_ESTIMATE_WORKFLOW_STAGES = getEstimateWorkflowStageDefinitions("primary");
+const OUTCOME_ESTIMATE_WORKFLOW_STAGES = getEstimateWorkflowStageDefinitions("outcome");
 
 const RESPONSIBLE_PARTIES = [
   "Southern Oak Concrete",
@@ -486,7 +476,7 @@ function Logo({ sm = false }) {
 
 function Pill({ status, label }) {
   const cfg = STATUS_STYLES[status] || { c: "#555", bg: "#eee" };
-  return <span className="status-pill" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", padding: "5px 10px", borderRadius: 999, background: cfg.bg, color: cfg.c, fontWeight: 700, fontSize: ".68rem", lineHeight: 1, whiteSpace: "nowrap", width: "fit-content", height: "auto" }}>{label || status}</span>;
+  return <span className="status-pill" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", padding: "5px 10px", borderRadius: 999, background: cfg.bg, color: cfg.c, fontWeight: 700, fontSize: ".68rem", lineHeight: 1, whiteSpace: "nowrap", width: "fit-content", height: "auto" }}>{label || getEstimateStatusDisplayLabel(status) || status}</span>;
 }
 
 function getCustomerStatusLabel(customer) {
@@ -978,7 +968,7 @@ function DashboardHomeSection({ tickets, jobs, events, conflicts, setSection }) 
                   <div className="dashboard-needs-name">{ticket.name}</div>
                   <div className="dashboard-needs-meta">{ticket.ptype}</div>
                 </div>
-                <div className="dashboard-needs-status">{ticket.status}</div>
+                <div className="dashboard-needs-status">{getEstimateStatusDisplayLabel(ticket.status)}</div>
               </div>
             ))}
           </div>
@@ -1070,7 +1060,9 @@ function EstimateTicketsSection({ tickets, ticketsLoading = false, ticketsError 
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} style={{ ...INP, width: "auto", cursor: "pointer" }}>
               <option value="All">All statuses</option>
-              {ESTIMATE_STATUSES.map(status => <option key={status} value={status}>{status}</option>)}
+              {ESTIMATE_WORKFLOW_FILTER_OPTIONS.map((status) => (
+                <option key={status.value} value={status.value}>{status.label}</option>
+              ))}
             </select>
             <select value={decisionFilter} onChange={e => setDecisionFilter(e.target.value)} style={{ ...INP, width: "auto", cursor: "pointer" }}>
               <option value="All">All decisions</option>
@@ -1211,6 +1203,7 @@ function TicketDetailView({
   const [siteVisitDraft, setSiteVisitDraft] = useState(null);
   const [siteVisitSaving, setSiteVisitSaving] = useState(false);
   const [siteVisitError, setSiteVisitError] = useState("");
+  const finalEstimateSectionRef = useRef<HTMLDivElement | null>(null);
   const persistedTicketRef = useRef(ticket);
   const mutationRequestIdRef = useRef(0);
   const mutationLockRef = useRef(false);
@@ -1220,17 +1213,20 @@ function TicketDetailView({
   const persistedWorkflowStatus = String(ticket.workflowStatus || "").trim().toLowerCase();
   const persistedSiteVisitAppointment = ticket.siteVisitAppointment || null;
   const siteVisitAppointment = t.siteVisitAppointment || persistedSiteVisitAppointment;
-  const effectiveWorkflowStatus = String(t.workflowStatus || persistedWorkflowStatus).trim().toLowerCase();
   const canManageSiteVisits = canManageCalendar(appRole);
-  const showMoveToSiteVisitAction = canManageSiteVisits
-    && effectiveWorkflowStatus === "site_visit_requested"
-    && !siteVisitAppointment;
-  const showScheduleSiteVisitAction = canManageSiteVisits
-    && effectiveWorkflowStatus === "site_visit_needed"
-    && !siteVisitAppointment;
+  const effectiveWorkflowStageId = resolveEffectiveEstimateWorkflowStage({
+    status: t.status,
+    workflowStatus: t.workflowStatus || persistedWorkflowStatus,
+    customerStatus: t.customerStatus,
+    finalEstimatePublications: t.finalEstimatePublications,
+    siteVisitAppointment,
+  });
+  const effectiveWorkflowStage = getEstimateWorkflowStageDefinition(effectiveWorkflowStageId);
+  const primaryQuickAction = getEstimateWorkflowQuickAction(effectiveWorkflowStageId, {
+    canManageSiteVisits,
+  });
   const showViewSiteVisitAction = !!siteVisitAppointment;
-  const canScheduleJob = ["Estimate Accepted", "Ready to Schedule"].includes(t.status);
-  const isSystemAcceptedStatus = t.status === "Estimate Accepted";
+  const isSystemAcceptedStatus = effectiveWorkflowStageId === "estimate_accepted";
   const isQuickActionRunning = quickActionPending !== "" || siteVisitSaving;
   const isMutationRunning = saving || isQuickActionRunning;
 
@@ -1431,7 +1427,17 @@ function TicketDetailView({
       return;
     }
 
-    if (status === "Estimate Accepted" || isSystemAcceptedStatus) {
+    const stage = getEstimateWorkflowStageDefinition(
+      resolveEffectiveEstimateWorkflowStage({
+        status,
+        workflowStatus: mapTicketStatusToWorkflowStatus(status, t.workflowStatus || "new_request"),
+        customerStatus: t.customerStatus,
+        finalEstimatePublications: t.finalEstimatePublications,
+        siteVisitAppointment,
+      })
+    );
+
+    if (!stage?.manualSelectable || isSystemAcceptedStatus) {
       return;
     }
 
@@ -1523,6 +1529,15 @@ function TicketDetailView({
     setSiteVisitDraft(buildSiteVisitDraftFromTicket(t, crews));
   };
 
+  const focusFinalEstimateSection = () => {
+    finalEstimateSectionRef.current?.scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
+    setQuickActionSuccess("Final Estimate section is ready below.");
+    setSaveError("");
+  };
+
   const saveSiteVisitSchedule = async draft => {
     const requestId = beginMutationRequest();
     if (requestId == null) {
@@ -1537,6 +1552,13 @@ function TicketDetailView({
     try {
       const savedTicket = await onScheduleSiteVisit(t, draft);
 
+      if (!isMountedRef.current) {
+        return;
+      }
+
+      setSiteVisitDraft(null);
+      setSiteVisitError("");
+
       if (!isCurrentMutationRequest(requestId)) {
         return;
       }
@@ -1544,7 +1566,6 @@ function TicketDetailView({
       if (savedTicket) {
         setT(savedTicket);
       }
-      setSiteVisitDraft(null);
       setQuickActionSuccess("Site visit scheduled and workflow moved to Site Visit Scheduled.");
     } catch (error) {
       if (!isCurrentMutationRequest(requestId)) {
@@ -1642,12 +1663,14 @@ function TicketDetailView({
               </div>}
             </Card>
 
-            <FinalEstimatePanel
-              ticket={t}
-              appRole={appRole}
-              setTicket={setT}
-              onRefreshTicket={refreshTicketFromDatabase}
-            />
+            <div ref={finalEstimateSectionRef}>
+              <FinalEstimatePanel
+                ticket={t}
+                appRole={appRole}
+                setTicket={setT}
+                onRefreshTicket={refreshTicketFromDatabase}
+              />
+            </div>
 
             {t.files && t.files.length > 0 && <Card>
               <h3 style={{ fontSize: ".82rem", fontWeight: 700, color: B.dark, textTransform: "uppercase", letterSpacing: .5, marginBottom: 12 }}><i className="ti ti-paperclip" style={{ marginRight: 6, color: B.bronze }} aria-hidden="true" />Files Uploaded ({t.files.length})</h3>
@@ -1678,7 +1701,7 @@ function TicketDetailView({
                     <div style={{ width: 10, height: 10, borderRadius: "50%", background: (STATUS_STYLES[h.s] || { c: B.lgray }).c, marginTop: 4 }} />
                     <div>
                       <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
-                        <span style={{ fontSize: ".78rem", fontWeight: 700, color: B.dark }}>{h.s}</span>
+                        <span style={{ fontSize: ".78rem", fontWeight: 700, color: B.dark }}>{getEstimateStatusDisplayLabel(h.s)}</span>
                         <span style={{ fontSize: ".68rem", color: B.gray }}>{new Date(h.d).toLocaleString()}</span>
                       </div>
                       {h.n && <p style={{ fontSize: ".74rem", color: B.gray, marginTop: 2, lineHeight: 1.5 }}>{h.n}</p>}
@@ -1693,29 +1716,50 @@ function TicketDetailView({
             <Card>
               <h3 style={{ fontSize: ".82rem", fontWeight: 700, color: B.dark, textTransform: "uppercase", letterSpacing: .5, marginBottom: 12 }}><i className="ti ti-bolt" style={{ marginRight: 6, color: B.bronze }} aria-hidden="true" />Quick Actions</h3>
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                {showMoveToSiteVisitAction && (
+                {primaryQuickAction.kind === "status" && (
                   <Btn
                     full
                     sm
                     v="green"
                     onClick={() => {
                       void runQuickAction({
-                        status: "Site Visit Needed",
-                        note: "Site visit approved for scheduling.",
-                        successMessage: "Estimate moved to Site Visit Needed.",
+                        status: primaryQuickAction.targetStatus,
+                        note: primaryQuickAction.historyNote,
+                        successMessage: primaryQuickAction.successMessage,
                       });
                     }}
                     disabled={isMutationRunning}
                   >
-                    <i className="ti ti-map-search" style={{ marginRight: 5, fontSize: 13 }} aria-hidden="true" />
-                    {quickActionPending === "Site Visit Needed" ? "Updating..." : "Move to Site Visit Needed"}
+                    <i className={primaryQuickAction.icon} style={{ marginRight: 5, fontSize: 13 }} aria-hidden="true" />
+                    {quickActionPending === primaryQuickAction.targetStatus ? "Updating..." : primaryQuickAction.label}
                   </Btn>
                 )}
-                {showScheduleSiteVisitAction && (
+                {primaryQuickAction.kind === "schedule_site_visit" && (
                   <Btn full sm v="green" onClick={openSiteVisitSchedule} disabled={isMutationRunning}>
-                    <i className="ti ti-calendar-plus" style={{ marginRight: 5, fontSize: 13 }} aria-hidden="true" />
-                    Schedule Site Visit
+                    <i className={primaryQuickAction.icon} style={{ marginRight: 5, fontSize: 13 }} aria-hidden="true" />
+                    {primaryQuickAction.label}
                   </Btn>
+                )}
+                {primaryQuickAction.kind === "focus_final_estimate" && (
+                  <>
+                    <Btn full sm v="green" onClick={focusFinalEstimateSection}>
+                      <i className={primaryQuickAction.icon} style={{ marginRight: 5, fontSize: 13 }} aria-hidden="true" />
+                      {primaryQuickAction.label}
+                    </Btn>
+                    <div style={{ fontSize: ".76rem", color: B.gray, lineHeight: 1.5 }}>{primaryQuickAction.helperText}</div>
+                  </>
+                )}
+                {primaryQuickAction.kind === "schedule_job" && (
+                  <Btn full sm v="dark" onClick={() => onOpenSchedule(t)} disabled={isMutationRunning}>
+                    <i className={primaryQuickAction.icon} style={{ marginRight: 5, fontSize: 13 }} aria-hidden="true" />
+                    {primaryQuickAction.label}
+                  </Btn>
+                )}
+                {primaryQuickAction.kind === "info" && (
+                  <div style={{ borderRadius: 8, padding: "10px 12px", background: B.sandD, color: B.mid, fontSize: ".76rem", lineHeight: 1.5 }}>
+                    <strong style={{ display: "block", color: B.dark, marginBottom: 4 }}>{primaryQuickAction.label}</strong>
+                    {primaryQuickAction.helperText}
+                  </div>
                 )}
                 {showViewSiteVisitAction && (
                   <Btn full sm v="dark" onClick={() => onViewSiteVisitCalendar(siteVisitAppointment)}>
@@ -1723,13 +1767,8 @@ function TicketDetailView({
                     View on Calendar
                   </Btn>
                 )}
-                {canScheduleJob && (
-                  <Btn full sm v="dark" onClick={() => onOpenSchedule(t)} disabled={isMutationRunning}>
-                    <i className="ti ti-calendar-event" style={{ marginRight: 5, fontSize: 13 }} aria-hidden="true" />Schedule Job
-                  </Btn>
-                )}
-                {!showMoveToSiteVisitAction && !showScheduleSiteVisitAction && !showViewSiteVisitAction && !canScheduleJob && (
-                  <div style={{ fontSize: ".76rem", color: B.gray, lineHeight: 1.5 }}>This lead is best handled through follow-up and status updates before scheduling work.</div>
+                {primaryQuickAction.kind === "none" && (
+                  <div style={{ fontSize: ".76rem", color: B.gray, lineHeight: 1.5 }}>{primaryQuickAction.helperText}</div>
                 )}
                 <Btn full sm v="outline" onClick={save} disabled={isMutationRunning}>
                   <i className="ti ti-device-floppy" style={{ marginRight: 5, fontSize: 13 }} aria-hidden="true" />{saving ? "Saving..." : "Save Lead Updates"}
@@ -1773,24 +1812,41 @@ function TicketDetailView({
             <Card>
               <h3 style={{ fontSize: ".82rem", fontWeight: 700, color: B.dark, textTransform: "uppercase", letterSpacing: .5, marginBottom: 12 }}><i className="ti ti-tag" style={{ marginRight: 6, color: B.bronze }} aria-hidden="true" />Status</h3>
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                {SELECTABLE_ESTIMATE_STATUSES.map(status => (
-                  <button key={status} onClick={() => changeStatus(status)} disabled={isMutationRunning || isSystemAcceptedStatus} style={{ padding: "8px 12px", borderRadius: 6, border: `1.5px solid ${t.status === status ? B.green : B.border}`, background: t.status === status ? "#deeade" : B.white, color: t.status === status ? B.green : B.mid, fontWeight: t.status === status ? 700 : 500, fontSize: ".76rem", cursor: isMutationRunning || isSystemAcceptedStatus ? "not-allowed" : "pointer", fontFamily: "inherit", textAlign: "left", display: "flex", alignItems: "center", justifyContent: "space-between", opacity: isMutationRunning || isSystemAcceptedStatus ? 0.7 : 1 }}>
-                    <span>{status}</span>
-                    {t.status === status && <i className="ti ti-check" style={{ fontSize: 13, color: B.green }} aria-hidden="true" />}
-                  </button>
-                ))}
-                <button disabled style={{ padding: "8px 12px", borderRadius: 6, border: `1.5px solid ${t.status === "Estimate Accepted" ? B.green : B.border}`, background: t.status === "Estimate Accepted" ? "#deeade" : "#F7F6F0", color: t.status === "Estimate Accepted" ? B.green : B.gray, fontWeight: t.status === "Estimate Accepted" ? 700 : 500, fontSize: ".76rem", cursor: "not-allowed", fontFamily: "inherit", textAlign: "left", display: "flex", alignItems: "center", justifyContent: "space-between", opacity: 0.9 }}>
-                  <span>Estimate Accepted</span>
-                  {t.status === "Estimate Accepted" && <i className="ti ti-check" style={{ fontSize: 13, color: B.green }} aria-hidden="true" />}
-                </button>
-                <div style={{ fontSize: ".72rem", color: B.gray, lineHeight: 1.5 }}>
-                  Set automatically when the customer accepts the published final estimate.
+                {PRIMARY_ESTIMATE_WORKFLOW_STAGES.map((stage) => {
+                  const isCurrentStage = effectiveWorkflowStageId === stage.id;
+                  const isDisabled = isMutationRunning || !stage.manualSelectable || isSystemAcceptedStatus;
+
+                  return (
+                    <button key={stage.id} onClick={() => changeStatus(stage.ticketStatus)} disabled={isDisabled} style={{ padding: "8px 12px", borderRadius: 6, border: `1.5px solid ${isCurrentStage ? B.green : B.border}`, background: isCurrentStage ? "#deeade" : stage.manualSelectable ? B.white : "#F7F6F0", color: isCurrentStage ? B.green : stage.manualSelectable ? B.mid : B.gray, fontWeight: isCurrentStage ? 700 : 500, fontSize: ".76rem", cursor: isDisabled ? "not-allowed" : "pointer", fontFamily: "inherit", textAlign: "left", display: "flex", alignItems: "center", justifyContent: "space-between", opacity: isDisabled ? 0.85 : 1 }}>
+                      <span>{stage.displayLabel}</span>
+                      {isCurrentStage && <i className="ti ti-check" style={{ fontSize: 13, color: B.green }} aria-hidden="true" />}
+                    </button>
+                  );
+                })}
+                {effectiveWorkflowStage?.helperText && (
+                  <div style={{ fontSize: ".72rem", color: B.gray, lineHeight: 1.5 }}>
+                    {effectiveWorkflowStage.helperText}
+                  </div>
+                )}
+                <div style={{ marginTop: 8, fontSize: ".72rem", fontWeight: 700, color: B.gray, textTransform: "uppercase", letterSpacing: .5 }}>
+                  Other Outcomes
                 </div>
+                {OUTCOME_ESTIMATE_WORKFLOW_STAGES.map((stage) => {
+                  const isCurrentStage = effectiveWorkflowStageId === stage.id;
+                  const isDisabled = isMutationRunning;
+
+                  return (
+                    <button key={stage.id} onClick={() => changeStatus(stage.ticketStatus)} disabled={isDisabled} style={{ padding: "8px 12px", borderRadius: 6, border: `1.5px solid ${isCurrentStage ? B.green : B.border}`, background: isCurrentStage ? "#deeade" : B.white, color: isCurrentStage ? B.green : B.mid, fontWeight: isCurrentStage ? 700 : 500, fontSize: ".76rem", cursor: isDisabled ? "not-allowed" : "pointer", fontFamily: "inherit", textAlign: "left", display: "flex", alignItems: "center", justifyContent: "space-between", opacity: isDisabled ? 0.85 : 1 }}>
+                      <span>{stage.displayLabel}</span>
+                      {isCurrentStage && <i className="ti ti-check" style={{ fontSize: 13, color: B.green }} aria-hidden="true" />}
+                    </button>
+                  );
+                })}
               </div>
             </Card>
 
             <Card>
-              <h3 style={{ fontSize: ".82rem", fontWeight: 700, color: B.dark, textTransform: "uppercase", letterSpacing: .5, marginBottom: 12 }}><i className="ti ti-route" style={{ marginRight: 6, color: B.bronze }} aria-hidden="true" />Estimate Decision</h3>
+              <h3 style={{ fontSize: ".82rem", fontWeight: 700, color: B.dark, textTransform: "uppercase", letterSpacing: .5, marginBottom: 12 }}><i className="ti ti-route" style={{ marginRight: 6, color: B.bronze }} aria-hidden="true" />Initial Estimate Range Response</h3>
               <div style={{ display: "grid", gap: 10 }}>
                 <div>
                   <div style={{ fontSize: ".72rem", color: B.gray, marginBottom: 4 }}>Customer decision</div>
@@ -1825,10 +1881,6 @@ function TicketDetailView({
               <div style={{ marginBottom: 12 }}>
                 <div style={{ fontSize: ".72rem", color: B.gray, marginBottom: 2 }}>Rough estimate range</div>
                 <div style={{ fontWeight: 700, color: B.dark, fontSize: "1rem" }}>{fmtMoney(t.rLow)} - {fmtMoney(t.rHigh)}</div>
-              </div>
-              <div style={{ marginBottom: 10 }}>
-                <label style={{ display: "block", fontSize: ".76rem", fontWeight: 700, color: B.dark, marginBottom: 4 }}>Final quote amount</label>
-                <input style={INP} type="number" placeholder="e.g. 8500" value={t.quote || ""} onChange={e => setT(prev => ({ ...prev, quote: e.target.value ? parseFloat(e.target.value) : null }))} />
               </div>
               <div>
                 <label style={{ display: "block", fontSize: ".76rem", fontWeight: 700, color: B.dark, marginBottom: 4 }}>Follow-up date</label>

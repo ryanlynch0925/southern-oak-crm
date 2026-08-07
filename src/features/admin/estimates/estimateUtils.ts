@@ -261,6 +261,7 @@ function resolveDisplayWorkflowStatus(
   hasActiveSiteVisitAppointment: boolean
 ): EstimateWorkflowStatus | null {
   const explicitWorkflowStatus = normalizeWorkflowStatus(estimate.workflow_status);
+  const hasPublishedFinalEstimate = hasFinalEstimatePublication(estimate);
 
   if (!explicitWorkflowStatus || !WORKFLOW_STATUS_TO_TICKET_STATUS[explicitWorkflowStatus]) {
     return null;
@@ -274,6 +275,10 @@ function resolveDisplayWorkflowStatus(
     explicitWorkflowStatus === "estimate_accepted"
     && normalizeEstimateStatusValue(estimate.status) !== "accepted"
   ) {
+    return null;
+  }
+
+  if (explicitWorkflowStatus === "final_quote_sent" && !hasPublishedFinalEstimate) {
     return null;
   }
 
@@ -312,7 +317,7 @@ function inferLegacyWorkflowStatus(
   if (hasActiveSiteVisitAppointment) return "site_visit_scheduled";
   if (hasAcceptedFinalEstimate(estimate)) return "estimate_accepted";
   if (hasLinkedJobReadyState(estimate)) return "ready_to_schedule";
-  if (hasFinalEstimatePublication(estimate) || estimate.final_quote_amount != null) return "final_quote_sent";
+  if (hasFinalEstimatePublication(estimate)) return "final_quote_sent";
   if (estimateStatus === "accepted" && customerRequestedSiteVisit) return "site_visit_requested";
   if (estimateStatus === "accepted") return "interested";
   if (customerRequestedSiteVisit) return "site_visit_requested";
@@ -608,9 +613,7 @@ function mapFinalEstimateDraft(
       estimate.final_estimate_scope_description,
       normalizeText(estimate.description, normalizeText(estimate.notes))
     ),
-    totalAmount: toNullableCurrencyNumber(
-      estimate.final_estimate_total_amount ?? estimate.final_quote_amount
-    ),
+    totalAmount: toNullableCurrencyNumber(estimate.final_estimate_total_amount),
     depositType: normalizeFinalEstimateDepositType(
       estimate.final_estimate_deposit_type
     ),
